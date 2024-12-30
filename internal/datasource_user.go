@@ -9,8 +9,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-var _ datasource.DataSource = &UserDataSource{}
-var _ datasource.DataSourceWithConfigure = &UserDataSource{}
+var (
+	_ datasource.DataSource              = &UserDataSource{}
+	_ datasource.DataSourceWithConfigure = &UserDataSource{}
+)
 
 type UserDataSource struct {
 	client APIClient
