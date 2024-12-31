@@ -18,6 +18,12 @@ var _ provider.Provider = &SlackProvider{}
 
 type APIClient interface {
 	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+	CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup) (slack.UserGroup, error)
+	GetUserGroupsContext(ctx context.Context, opts ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
+	UpdateUserGroupContext(ctx context.Context, userGroupID string, opts ...slack.UpdateUserGroupsOption) (slack.UserGroup, error)
+	UpdateUserGroupMembersContext(ctx context.Context, userGroup string, members string) (slack.UserGroup, error)
+	EnableUserGroupContext(ctx context.Context, userGroup string) (slack.UserGroup, error)
+	DisableUserGroupContext(ctx context.Context, userGroup string) (slack.UserGroup, error)
 }
 
 type SlackProvider struct {
@@ -75,5 +81,6 @@ func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource 
 func (m *SlackProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewUserDataSource,
+		NewUserGroupDataSource,
 	}
 }
