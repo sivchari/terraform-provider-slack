@@ -10,7 +10,7 @@ import (
 	"github.com/sivchari/terraform-provider-slack/internal"
 )
 
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.20.1
 
 func main() {
 	var debugMode bool
