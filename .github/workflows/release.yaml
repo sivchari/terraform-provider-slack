@@ -1,0 +1,32 @@
+name: 'release'
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: 'ubuntu-latest'
+    steps:
+      - uses: 'actions/checkout@v4'
+        with:
+          fetch-depth: 0
+
+      - uses: 'actions/setup-go@v5'
+        with:
+          go-version: 'stable'
+
+      - id: 'import_gpg'
+        uses: 'crazy-max/ghaction-import-gpg@v6'
+        with:
+          gpg_private_key: '${{ secrets.GPG_PRIVATE_KEY }}'
+          passphrase: '${{ secrets.PASSPHRASE }}'
+
+      - uses: 'goreleaser/goreleaser-action@v6'
+        with:
+          version: 'v1.14.1'
+          args: 'release --rm-dist'
+        env:
+          GPG_FINGERPRINT: '${{ steps.import_gpg.outputs.fingerprint }}'
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
