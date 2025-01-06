@@ -45,11 +45,11 @@ func NewUserDataSource() datasource.DataSource {
 	return &UserDataSource{}
 }
 
-func (m *UserDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (u *UserDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_user", req.ProviderTypeName)
 }
 
-func (m *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (u *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -118,21 +118,21 @@ func (m *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 	}
 }
 
-func (m *UserDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (u *UserDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	m.client = req.ProviderData.(APIClient)
+	u.client = req.ProviderData.(APIClient)
 }
 
-func (m *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+func (u *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
 	var state UserDataSourceState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
-	user, err := m.client.GetUserByEmailContext(ctx, state.Email.ValueString())
+	user, err := u.client.GetUserByEmailContext(ctx, state.Email.ValueString())
 	if err != nil {
 		res.Diagnostics.AddError(
 			fmt.Sprintf("the user that has the email %s does not exist", state.Email.String()),

@@ -47,11 +47,11 @@ func NewUserGroupDataSource() datasource.DataSource {
 	return &UserGroupDataSource{}
 }
 
-func (m *UserGroupDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (u *UserGroupDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_usergroup", req.ProviderTypeName)
 }
 
-func (m *UserGroupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (u *UserGroupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -111,21 +111,21 @@ func (m *UserGroupDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 	}
 }
 
-func (m *UserGroupDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (u *UserGroupDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	m.client = req.ProviderData.(APIClient)
+	u.client = req.ProviderData.(APIClient)
 }
 
-func (m *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+func (u *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
 	var state UserGroupDataSourceState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
-	user, err := m.client.GetUserGroupsContext(ctx,
+	userGroups, err := u.client.GetUserGroupsContext(ctx,
 		slack.GetUserGroupsOptionIncludeCount(true),
 		slack.GetUserGroupsOptionIncludeUsers(true),
 		slack.GetUserGroupsOptionIncludeDisabled(true),
@@ -136,15 +136,15 @@ func (m *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadReque
 			err.Error(),
 		)
 	}
-	var userGroup *slack.UserGroup
-	for _, ug := range user {
+	var userGroup slack.UserGroup
+	for _, ug := range userGroups {
 		if ug.ID == state.ID.ValueString() {
-			userGroup = &ug
+			userGroup = ug
 			break
 		}
 	}
 
-	if userGroup == nil {
+	if userGroup.ID == "" {
 		res.Diagnostics.AddError(
 			fmt.Sprintf("the usergroup that has the id %s does not exist", state.ID.String()),
 			"",
@@ -157,12 +157,19 @@ func (m *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 	channelList, diags := types.ListValue(types.StringType, channels)
 	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
 
 	groups := make([]attr.Value, 0, len(userGroup.Prefs.Groups))
 	for _, group := range userGroup.Prefs.Groups {
 		groups = append(groups, types.StringValue(group))
 	}
 	groupList, diags := types.ListValue(types.StringType, groups)
+	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
 
 	users := make([]attr.Value, 0, len(userGroup.Users))
 	for _, user := range userGroup.Users {
@@ -170,6 +177,9 @@ func (m *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 	userList, diags := types.ListValue(types.StringType, users)
 	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
 
 	state = UserGroupDataSourceState{
 		ID:          types.StringValue(userGroup.ID),

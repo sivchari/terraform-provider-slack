@@ -75,7 +75,9 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 }
 
 func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{
+		NewUserGroupResource,
+	}
 }
 
 func (m *SlackProvider) DataSources(_ context.Context) []func() datasource.DataSource {
