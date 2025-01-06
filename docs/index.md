@@ -17,4 +17,4 @@ description: |-
 
 ### Required
 
-- `token` (Boolean, Sensitive)
+- `token` (String, Sensitive)
