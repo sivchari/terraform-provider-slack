@@ -112,12 +112,19 @@ func (u *UserGroupResource) ImportState(ctx context.Context, req resource.Import
 	}
 	channelList, diags := types.ListValue(types.StringType, channels)
 	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
 
 	users := make([]attr.Value, 0, len(userGroup.Users))
 	for _, user := range userGroup.Users {
 		users = append(users, types.StringValue(user))
 	}
 	userList, diags := types.ListValue(types.StringType, users)
+	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
 
 	state := UserGroupResourceState{
 		ID:          types.StringValue(userGroup.ID),
@@ -162,6 +169,29 @@ func (u *UserGroupResource) Create(ctx context.Context, req resource.CreateReque
 		channels = append(channels, str)
 	}
 
+	userGroup, err := u.client.CreateUserGroupContext(ctx, slack.UserGroup{
+		Name: state.Name.ValueString(),
+		Prefs: slack.UserGroupPrefs{
+			Channels: channels,
+		},
+		Description: state.Description.ValueString(),
+		Handle:      state.Handle.ValueString(),
+		TeamID:      state.TeamID.ValueString(),
+	})
+	if err != nil {
+		res.Diagnostics.AddError("failed to create user group", err.Error())
+		return
+	}
+
+	if !state.Enabled.ValueBool() {
+		if _, err := u.client.DisableUserGroupContext(ctx, userGroup.ID); err != nil {
+			res.Diagnostics.AddError("failed to disable user group", err.Error())
+			return
+		}
+		// If the user group is disabled, we don't need to update the users
+		return
+	}
+
 	users := make([]string, 0, len(state.Users.Elements()))
 	for _, user := range state.Users.Elements() {
 		var str string
@@ -177,26 +207,11 @@ func (u *UserGroupResource) Create(ctx context.Context, req resource.CreateReque
 		users = append(users, str)
 	}
 
-	userGroup, err := u.client.CreateUserGroupContext(ctx, slack.UserGroup{
-		Name: state.Name.ValueString(),
-		Prefs: slack.UserGroupPrefs{
-			Channels: channels,
-		},
-		Users:       users,
-		Description: state.Description.ValueString(),
-		Handle:      state.Handle.ValueString(),
-		TeamID:      state.TeamID.ValueString(),
-	})
+	stringedUsers := strings.Join(users, ",")
+	userGroup, err = u.client.UpdateUserGroupMembersContext(ctx, userGroup.ID, stringedUsers)
 	if err != nil {
-		res.Diagnostics.AddError("failed to create user group", err.Error())
+		res.Diagnostics.AddError("failed to update user group members", err.Error())
 		return
-	}
-
-	if !state.Enabled.ValueBool() {
-		if _, err := u.client.DisableUserGroupContext(ctx, userGroup.ID); err != nil {
-			res.Diagnostics.AddError("failed to disable user group", err.Error())
-			return
-		}
 	}
 
 	stateChannels := make([]attr.Value, 0, len(userGroup.Prefs.Channels))
@@ -256,6 +271,20 @@ func (u *UserGroupResource) Update(ctx context.Context, req resource.UpdateReque
 	diags := req.Plan.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
+		return
+	}
+
+	if state.Enabled.ValueBool() {
+		if _, err := u.client.EnableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
+			res.Diagnostics.AddError("failed to enable user group", err.Error())
+			return
+		}
+	} else {
+		if _, err := u.client.DisableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
+			res.Diagnostics.AddError("failed to disable user group", err.Error())
+			return
+		}
+		// If the user group is disabled, we don't need following process anymore
 		return
 	}
 
@@ -325,18 +354,6 @@ func (u *UserGroupResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	if state.Enabled.ValueBool() {
-		if _, err := u.client.EnableUserGroupContext(ctx, userGroup.ID); err != nil {
-			res.Diagnostics.AddError("failed to enable user group", err.Error())
-			return
-		}
-	} else {
-		if _, err := u.client.DisableUserGroupContext(ctx, userGroup.ID); err != nil {
-			res.Diagnostics.AddError("failed to disable user group", err.Error())
-			return
-		}
-	}
-
 	state = UserGroupResourceState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
@@ -361,5 +378,4 @@ func (u *UserGroupResource) Delete(ctx context.Context, req resource.DeleteReque
 		res.Diagnostics.AddError("failed to delete user group", err.Error())
 		return
 	}
-	res.State.RemoveResource(ctx)
 }
