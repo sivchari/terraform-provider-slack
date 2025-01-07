@@ -14,16 +14,16 @@ import (
 )
 
 var (
-	_ resource.Resource                = &UserGroupResource{}
-	_ resource.ResourceWithImportState = &UserGroupResource{}
-	_ resource.ResourceWithConfigure   = &UserGroupResource{}
+	_ resource.Resource                = &ResourceUserGroup{}
+	_ resource.ResourceWithImportState = &ResourceUserGroup{}
+	_ resource.ResourceWithConfigure   = &ResourceUserGroup{}
 )
 
-type UserGroupResource struct {
+type ResourceUserGroup struct {
 	client APIClient
 }
 
-type UserGroupResourceState struct {
+type ResourceUserGroupState struct {
 	ID          types.String `tfsdk:"id"`
 	Name        types.String `tfsdk:"name"`
 	Channels    types.List   `tfsdk:"channels"`
@@ -34,15 +34,15 @@ type UserGroupResourceState struct {
 	Enabled     types.Bool   `tfsdk:"enabled"`
 }
 
-func NewUserGroupResource() resource.Resource {
-	return &UserGroupResource{}
+func NewResourceUserGroup() resource.Resource {
+	return &ResourceUserGroup{}
 }
 
-func (u *UserGroupResource) Metadata(_ context.Context, req resource.MetadataRequest, res *resource.MetadataResponse) {
+func (u *ResourceUserGroup) Metadata(_ context.Context, req resource.MetadataRequest, res *resource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_usergroup", req.ProviderTypeName)
 }
 
-func (u *UserGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, res *resource.SchemaResponse) {
+func (u *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, res *resource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -77,7 +77,7 @@ func (u *UserGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	}
 }
 
-func (u *UserGroupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
+func (u *ResourceUserGroup) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
 	userGroups, err := u.client.GetUserGroupsContext(ctx,
 		slack.GetUserGroupsOptionIncludeUsers(true),
 		slack.GetUserGroupsOptionIncludeCount(true),
@@ -126,7 +126,7 @@ func (u *UserGroupResource) ImportState(ctx context.Context, req resource.Import
 		return
 	}
 
-	state := UserGroupResourceState{
+	state := ResourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
 		Channels:    channelList,
@@ -139,15 +139,15 @@ func (u *UserGroupResource) ImportState(ctx context.Context, req resource.Import
 	res.Diagnostics.Append(diags...)
 }
 
-func (u *UserGroupResource) Configure(ctx context.Context, req resource.ConfigureRequest, res *resource.ConfigureResponse) {
+func (u *ResourceUserGroup) Configure(ctx context.Context, req resource.ConfigureRequest, res *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
 	u.client = req.ProviderData.(APIClient)
 }
 
-func (u *UserGroupResource) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
-	var state UserGroupResourceState
+func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
+	var state ResourceUserGroupState
 	diags := req.Plan.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
@@ -234,7 +234,7 @@ func (u *UserGroupResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	state = UserGroupResourceState{
+	state = ResourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
 		Channels:    stateChannelList,
@@ -252,8 +252,8 @@ func (u *UserGroupResource) Create(ctx context.Context, req resource.CreateReque
 	}
 }
 
-func (u *UserGroupResource) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
-	var state UserGroupResourceState
+func (u *ResourceUserGroup) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
+	var state ResourceUserGroupState
 	diags := req.State.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
@@ -266,8 +266,8 @@ func (u *UserGroupResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 }
 
-func (u *UserGroupResource) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
-	var state UserGroupResourceState
+func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
+	var state ResourceUserGroupState
 	diags := req.Plan.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
@@ -354,7 +354,7 @@ func (u *UserGroupResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	state = UserGroupResourceState{
+	state = ResourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
 		Channels:    stateChannelList,
@@ -366,8 +366,8 @@ func (u *UserGroupResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 }
 
-func (u *UserGroupResource) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
-	var state UserGroupResourceState
+func (u *ResourceUserGroup) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
+	var state ResourceUserGroupState
 	diags := req.State.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {

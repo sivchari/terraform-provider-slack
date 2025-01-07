@@ -9,7 +9,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestAccUser(t *testing.T) {
+func TestAccDataSourceUser(t *testing.T) {
 	t.Parallel()
 
 	resp := &slack.User{
@@ -45,7 +45,7 @@ func TestAccUser(t *testing.T) {
 		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccUser(),
+				Config: testAccDataSourceUser(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.slack_user.test", "id", "test"),
 					resource.TestCheckResourceAttr("data.slack_user.test", "email", "test@example.com"),
@@ -72,7 +72,7 @@ func TestAccUser(t *testing.T) {
 	})
 }
 
-func testAccUser() string {
+func testAccDataSourceUser() string {
 	return providerConfig + `
 data "slack_user" "test" {
     email = "test@example.com"

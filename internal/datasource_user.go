@@ -10,15 +10,15 @@ import (
 )
 
 var (
-	_ datasource.DataSource              = &UserDataSource{}
-	_ datasource.DataSourceWithConfigure = &UserDataSource{}
+	_ datasource.DataSource              = &DataSourceUser{}
+	_ datasource.DataSourceWithConfigure = &DataSourceUser{}
 )
 
-type UserDataSource struct {
+type DataSourceUser struct {
 	client APIClient
 }
 
-type UserDataSourceState struct {
+type DataSourceUserState struct {
 	ID                types.String `tfsdk:"id"`
 	Email             types.String `tfsdk:"email"`
 	TeamID            types.String `tfsdk:"team_id"`
@@ -41,15 +41,15 @@ type UserDataSourceState struct {
 	Locale            types.String `tfsdk:"locale"`
 }
 
-func NewUserDataSource() datasource.DataSource {
-	return &UserDataSource{}
+func NewDataSourceUser() datasource.DataSource {
+	return &DataSourceUser{}
 }
 
-func (u *UserDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (u *DataSourceUser) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_user", req.ProviderTypeName)
 }
 
-func (u *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (u *DataSourceUser) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -118,15 +118,15 @@ func (u *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 	}
 }
 
-func (u *UserDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (u *DataSourceUser) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
 	u.client = req.ProviderData.(APIClient)
 }
 
-func (u *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
-	var state UserDataSourceState
+func (u *DataSourceUser) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+	var state DataSourceUserState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
@@ -139,7 +139,7 @@ func (u *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 			err.Error(),
 		)
 	}
-	state = UserDataSourceState{
+	state = DataSourceUserState{
 		ID:                types.StringValue(user.ID),
 		Email:             types.StringValue(user.Profile.Email),
 		TeamID:            types.StringValue(user.TeamID),

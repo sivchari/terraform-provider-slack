@@ -13,15 +13,15 @@ import (
 )
 
 var (
-	_ datasource.DataSource              = &UserGroupDataSource{}
-	_ datasource.DataSourceWithConfigure = &UserGroupDataSource{}
+	_ datasource.DataSource              = &DataSourceUserGroup{}
+	_ datasource.DataSourceWithConfigure = &DataSourceUserGroup{}
 )
 
-type UserGroupDataSource struct {
+type DataSourceUserGroup struct {
 	client APIClient
 }
 
-type UserGroupDataSourceState struct {
+type DataSourceUserGroupState struct {
 	ID          types.String              `tfsdk:"id"`
 	TeamID      types.String              `tfsdk:"team_id"`
 	IsUserGroup types.Bool                `tfsdk:"is_user_group"`
@@ -33,25 +33,25 @@ type UserGroupDataSourceState struct {
 	CreatedBy   types.String              `tfsdk:"created_by"`
 	UpdatedBy   types.String              `tfsdk:"updated_by"`
 	DeletedBy   types.String              `tfsdk:"deleted_by"`
-	Prefs       *UserGroupDataSourcePrefs `tfsdk:"prefs"`
+	Prefs       *DataSourceUserGroupPrefs `tfsdk:"prefs"`
 	UserCount   types.Number              `tfsdk:"user_count"`
 	Users       types.List                `tfsdk:"users"`
 }
 
-type UserGroupDataSourcePrefs struct {
+type DataSourceUserGroupPrefs struct {
 	Channels types.List `tfsdk:"channels"`
 	Groups   types.List `tfsdk:"groups"`
 }
 
-func NewUserGroupDataSource() datasource.DataSource {
-	return &UserGroupDataSource{}
+func NewDataSourceUserGroup() datasource.DataSource {
+	return &DataSourceUserGroup{}
 }
 
-func (u *UserGroupDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (u *DataSourceUserGroup) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_usergroup", req.ProviderTypeName)
 }
 
-func (u *UserGroupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (u *DataSourceUserGroup) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -111,15 +111,15 @@ func (u *UserGroupDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 	}
 }
 
-func (u *UserGroupDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (u *DataSourceUserGroup) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
 	u.client = req.ProviderData.(APIClient)
 }
 
-func (u *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
-	var state UserGroupDataSourceState
+func (u *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+	var state DataSourceUserGroupState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
@@ -181,7 +181,7 @@ func (u *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	state = UserGroupDataSourceState{
+	state = DataSourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		TeamID:      types.StringValue(userGroup.TeamID),
 		IsUserGroup: types.BoolValue(userGroup.IsUserGroup),
@@ -193,7 +193,7 @@ func (u *UserGroupDataSource) Read(ctx context.Context, req datasource.ReadReque
 		CreatedBy:   types.StringValue(userGroup.CreatedBy),
 		UpdatedBy:   types.StringValue(userGroup.UpdatedBy),
 		DeletedBy:   types.StringValue(userGroup.DeletedBy),
-		Prefs: &UserGroupDataSourcePrefs{
+		Prefs: &DataSourceUserGroupPrefs{
 			Channels: channelList,
 			Groups:   groupList,
 		},
