@@ -18,12 +18,20 @@ var _ provider.Provider = &SlackProvider{}
 
 type APIClient interface {
 	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+	// User Groups
 	CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup) (slack.UserGroup, error)
 	GetUserGroupsContext(ctx context.Context, opts ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	UpdateUserGroupContext(ctx context.Context, userGroupID string, opts ...slack.UpdateUserGroupsOption) (slack.UserGroup, error)
 	UpdateUserGroupMembersContext(ctx context.Context, userGroup string, members string) (slack.UserGroup, error)
 	EnableUserGroupContext(ctx context.Context, userGroup string) (slack.UserGroup, error)
 	DisableUserGroupContext(ctx context.Context, userGroup string) (slack.UserGroup, error)
+	// Conversations
+	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
+	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
+	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
+	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
+	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slack.Channel, error)
+	KickUserFromConversationContext(ctx context.Context, channelID string, user string) error
 }
 
 type SlackProvider struct {
@@ -76,13 +84,14 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewUserGroupResource,
+		NewResourceUserGroup,
 	}
 }
 
 func (m *SlackProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewUserDataSource,
-		NewUserGroupDataSource,
+		NewDataSourceUser,
+		NewDataSourceUserGroup,
+		NewDataSourceConversation,
 	}
 }

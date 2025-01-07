@@ -9,7 +9,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestAccUserGroup(t *testing.T) {
+func TestAccDataSourceUserGroup(t *testing.T) {
 	t.Parallel()
 
 	resp := []slack.UserGroup{
@@ -42,7 +42,7 @@ func TestAccUserGroup(t *testing.T) {
 		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccUserGroup(),
+				Config: testAccDataSourceUserGroup(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.slack_usergroup.test", "id", "test"),
 					resource.TestCheckResourceAttr("data.slack_usergroup.test", "team_id", "test"),
@@ -65,7 +65,7 @@ func TestAccUserGroup(t *testing.T) {
 	})
 }
 
-func testAccUserGroup() string {
+func testAccDataSourceUserGroup() string {
 	return providerConfig + `
 data "slack_usergroup" "test" {
     id = "test"
