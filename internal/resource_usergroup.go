@@ -38,11 +38,11 @@ func NewResourceUserGroup() resource.Resource {
 	return &ResourceUserGroup{}
 }
 
-func (u *ResourceUserGroup) Metadata(_ context.Context, req resource.MetadataRequest, res *resource.MetadataResponse) {
+func (r *ResourceUserGroup) Metadata(_ context.Context, req resource.MetadataRequest, res *resource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_usergroup", req.ProviderTypeName)
 }
 
-func (u *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, res *resource.SchemaResponse) {
+func (r *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, res *resource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -77,8 +77,8 @@ func (u *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, 
 	}
 }
 
-func (u *ResourceUserGroup) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
-	userGroups, err := u.client.GetUserGroupsContext(ctx,
+func (r *ResourceUserGroup) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
+	userGroups, err := r.client.GetUserGroupsContext(ctx,
 		slack.GetUserGroupsOptionIncludeUsers(true),
 		slack.GetUserGroupsOptionIncludeCount(true),
 		slack.GetUserGroupsOptionIncludeDisabled(true),
@@ -139,23 +139,23 @@ func (u *ResourceUserGroup) ImportState(ctx context.Context, req resource.Import
 	res.Diagnostics.Append(diags...)
 }
 
-func (u *ResourceUserGroup) Configure(ctx context.Context, req resource.ConfigureRequest, res *resource.ConfigureResponse) {
+func (r *ResourceUserGroup) Configure(ctx context.Context, req resource.ConfigureRequest, res *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	u.client = req.ProviderData.(APIClient)
+	r.client = req.ProviderData.(APIClient)
 }
 
-func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
-	var state ResourceUserGroupState
-	diags := req.Plan.Get(ctx, &state)
+func (r *ResourceUserGroup) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
+	var plan ResourceUserGroupState
+	diags := req.Plan.Get(ctx, &plan)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
 
-	channels := make([]string, 0, len(state.Channels.Elements()))
-	for _, channel := range state.Channels.Elements() {
+	channels := make([]string, 0, len(plan.Channels.Elements()))
+	for _, channel := range plan.Channels.Elements() {
 		var str string
 		val, err := channel.ToTerraformValue(ctx)
 		if err != nil {
@@ -169,22 +169,22 @@ func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 		channels = append(channels, str)
 	}
 
-	userGroup, err := u.client.CreateUserGroupContext(ctx, slack.UserGroup{
-		Name: state.Name.ValueString(),
+	userGroup, err := r.client.CreateUserGroupContext(ctx, slack.UserGroup{
+		Name: plan.Name.ValueString(),
 		Prefs: slack.UserGroupPrefs{
 			Channels: channels,
 		},
-		Description: state.Description.ValueString(),
-		Handle:      state.Handle.ValueString(),
-		TeamID:      state.TeamID.ValueString(),
+		Description: plan.Description.ValueString(),
+		Handle:      plan.Handle.ValueString(),
+		TeamID:      plan.TeamID.ValueString(),
 	})
 	if err != nil {
 		res.Diagnostics.AddError("failed to create user group", err.Error())
 		return
 	}
 
-	if !state.Enabled.ValueBool() {
-		if _, err := u.client.DisableUserGroupContext(ctx, userGroup.ID); err != nil {
+	if !plan.Enabled.ValueBool() {
+		if _, err := r.client.DisableUserGroupContext(ctx, userGroup.ID); err != nil {
 			res.Diagnostics.AddError("failed to disable user group", err.Error())
 			return
 		}
@@ -192,8 +192,8 @@ func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	users := make([]string, 0, len(state.Users.Elements()))
-	for _, user := range state.Users.Elements() {
+	users := make([]string, 0, len(plan.Users.Elements()))
+	for _, user := range plan.Users.Elements() {
 		var str string
 		val, err := user.ToTerraformValue(ctx)
 		if err != nil {
@@ -208,7 +208,7 @@ func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	stringedUsers := strings.Join(users, ",")
-	userGroup, err = u.client.UpdateUserGroupMembersContext(ctx, userGroup.ID, stringedUsers)
+	userGroup, err = r.client.UpdateUserGroupMembersContext(ctx, userGroup.ID, stringedUsers)
 	if err != nil {
 		res.Diagnostics.AddError("failed to update user group members", err.Error())
 		return
@@ -234,7 +234,7 @@ func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	state = ResourceUserGroupState{
+	state := ResourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
 		Channels:    stateChannelList,
@@ -242,17 +242,14 @@ func (u *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 		Description: types.StringValue(userGroup.Description),
 		Handle:      types.StringValue(userGroup.Handle),
 		TeamID:      types.StringValue(userGroup.TeamID),
-		Enabled:     state.Enabled,
+		Enabled:     plan.Enabled,
 	}
 
 	diags = res.State.Set(ctx, &state)
 	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
 }
 
-func (u *ResourceUserGroup) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
+func (r *ResourceUserGroup) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
 	var state ResourceUserGroupState
 	diags := req.State.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
@@ -261,26 +258,23 @@ func (u *ResourceUserGroup) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 	diags = res.State.Set(ctx, &state)
 	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
 }
 
-func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
-	var state ResourceUserGroupState
-	diags := req.Plan.Get(ctx, &state)
+func (r *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
+	var plan ResourceUserGroupState
+	diags := req.Plan.Get(ctx, &plan)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
 
-	if state.Enabled.ValueBool() {
-		if _, err := u.client.EnableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
+	if plan.Enabled.ValueBool() {
+		if _, err := r.client.EnableUserGroupContext(ctx, plan.ID.ValueString()); err != nil {
 			res.Diagnostics.AddError("failed to enable user group", err.Error())
 			return
 		}
 	} else {
-		if _, err := u.client.DisableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
+		if _, err := r.client.DisableUserGroupContext(ctx, plan.ID.ValueString()); err != nil {
 			res.Diagnostics.AddError("failed to disable user group", err.Error())
 			return
 		}
@@ -288,8 +282,8 @@ func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	channels := make([]string, 0, len(state.Channels.Elements()))
-	for _, channel := range state.Channels.Elements() {
+	channels := make([]string, 0, len(plan.Channels.Elements()))
+	for _, channel := range plan.Channels.Elements() {
 		var str string
 		val, err := channel.ToTerraformValue(ctx)
 		if err != nil {
@@ -303,17 +297,17 @@ func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 		channels = append(channels, str)
 	}
 
-	if _, err := u.client.UpdateUserGroupContext(ctx, state.ID.ValueString(), slack.UpdateUserGroupsOptionName(state.Name.ValueString()),
-		slack.UpdateUserGroupsOptionHandle(state.Handle.ValueString()),
+	if _, err := r.client.UpdateUserGroupContext(ctx, plan.ID.ValueString(), slack.UpdateUserGroupsOptionName(plan.Name.ValueString()),
+		slack.UpdateUserGroupsOptionHandle(plan.Handle.ValueString()),
 		slack.UpdateUserGroupsOptionChannels(channels),
-		slack.UpdateUserGroupsOptionDescription(state.Description.ValueStringPointer()),
+		slack.UpdateUserGroupsOptionDescription(plan.Description.ValueStringPointer()),
 	); err != nil {
 		res.Diagnostics.AddError("failed to update user group", err.Error())
 		return
 	}
 
-	users := make([]string, 0, len(state.Users.Elements()))
-	for _, user := range state.Users.Elements() {
+	users := make([]string, 0, len(plan.Users.Elements()))
+	for _, user := range plan.Users.Elements() {
 		var str string
 		val, err := user.ToTerraformValue(ctx)
 		if err != nil {
@@ -328,7 +322,7 @@ func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 	}
 	stringedUsers := strings.Join(users, ",")
 
-	userGroup, err := u.client.UpdateUserGroupMembersContext(ctx, state.ID.ValueString(), stringedUsers)
+	userGroup, err := r.client.UpdateUserGroupMembersContext(ctx, plan.ID.ValueString(), stringedUsers)
 	if err != nil {
 		res.Diagnostics.AddError("failed to update user group members", err.Error())
 		return
@@ -354,7 +348,7 @@ func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	state = ResourceUserGroupState{
+	state := ResourceUserGroupState{
 		ID:          types.StringValue(userGroup.ID),
 		Name:        types.StringValue(userGroup.Name),
 		Channels:    stateChannelList,
@@ -362,11 +356,14 @@ func (u *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 		Description: types.StringValue(userGroup.Description),
 		Handle:      types.StringValue(userGroup.Handle),
 		TeamID:      types.StringValue(userGroup.TeamID),
-		Enabled:     state.Enabled,
+		Enabled:     plan.Enabled,
 	}
+
+	diags = res.State.Set(ctx, &state)
+	res.Diagnostics.Append(diags...)
 }
 
-func (u *ResourceUserGroup) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
+func (r *ResourceUserGroup) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
 	var state ResourceUserGroupState
 	diags := req.State.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
@@ -374,7 +371,7 @@ func (u *ResourceUserGroup) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	if _, err := u.client.DisableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
+	if _, err := r.client.DisableUserGroupContext(ctx, state.ID.ValueString()); err != nil {
 		res.Diagnostics.AddError("failed to delete user group", err.Error())
 		return
 	}

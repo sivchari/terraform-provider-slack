@@ -47,11 +47,11 @@ func NewDataSourceUserGroup() datasource.DataSource {
 	return &DataSourceUserGroup{}
 }
 
-func (u *DataSourceUserGroup) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (d *DataSourceUserGroup) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_usergroup", req.ProviderTypeName)
 }
 
-func (u *DataSourceUserGroup) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (d *DataSourceUserGroup) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -111,21 +111,21 @@ func (u *DataSourceUserGroup) Schema(_ context.Context, _ datasource.SchemaReque
 	}
 }
 
-func (u *DataSourceUserGroup) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (d *DataSourceUserGroup) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	u.client = req.ProviderData.(APIClient)
+	d.client = req.ProviderData.(APIClient)
 }
 
-func (u *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+func (d *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
 	var state DataSourceUserGroupState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
-	userGroups, err := u.client.GetUserGroupsContext(ctx,
+	userGroups, err := d.client.GetUserGroupsContext(ctx,
 		slack.GetUserGroupsOptionIncludeCount(true),
 		slack.GetUserGroupsOptionIncludeUsers(true),
 		slack.GetUserGroupsOptionIncludeDisabled(true),

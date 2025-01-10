@@ -49,11 +49,11 @@ func NewDataSourceConversation() datasource.DataSource {
 	return &DataSourceConversation{}
 }
 
-func (u *DataSourceConversation) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
+func (d *DataSourceConversation) Metadata(_ context.Context, req datasource.MetadataRequest, res *datasource.MetadataResponse) {
 	res.TypeName = fmt.Sprintf("%s_conversation", req.ProviderTypeName)
 }
 
-func (u *DataSourceConversation) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
+func (d *DataSourceConversation) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -117,21 +117,21 @@ func (u *DataSourceConversation) Schema(_ context.Context, _ datasource.SchemaRe
 	}
 }
 
-func (u *DataSourceConversation) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
+func (d *DataSourceConversation) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	u.client = req.ProviderData.(APIClient)
+	d.client = req.ProviderData.(APIClient)
 }
 
-func (u *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
+func (d *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {
 	var state DataSourceConversationState
 	diags := req.Config.Get(ctx, &state)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
-	channel, err := u.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+	channel, err := d.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
 		ChannelID: state.ID.ValueString(),
 	})
 	if err != nil {
@@ -141,7 +141,7 @@ func (u *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRe
 		)
 		return
 	}
-	users, _, err := u.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+	users, _, err := d.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
 		ChannelID: state.ID.ValueString(),
 	})
 	if err != nil {
