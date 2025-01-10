@@ -40,6 +40,51 @@ func (m *MockAPIClient) EXPECT() *MockAPIClientMockRecorder {
 	return m.recorder
 }
 
+// ArchiveConversationContext mocks base method.
+func (m *MockAPIClient) ArchiveConversationContext(ctx context.Context, channelID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ArchiveConversationContext", ctx, channelID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ArchiveConversationContext indicates an expected call of ArchiveConversationContext.
+func (mr *MockAPIClientMockRecorder) ArchiveConversationContext(ctx, channelID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ArchiveConversationContext", reflect.TypeOf((*MockAPIClient)(nil).ArchiveConversationContext), ctx, channelID)
+}
+
+// CloseConversationContext mocks base method.
+func (m *MockAPIClient) CloseConversationContext(ctx context.Context, channelID string) (bool, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CloseConversationContext", ctx, channelID)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// CloseConversationContext indicates an expected call of CloseConversationContext.
+func (mr *MockAPIClientMockRecorder) CloseConversationContext(ctx, channelID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseConversationContext", reflect.TypeOf((*MockAPIClient)(nil).CloseConversationContext), ctx, channelID)
+}
+
+// CreateConversationContext mocks base method.
+func (m *MockAPIClient) CreateConversationContext(ctx context.Context, params slack.CreateConversationParams) (*slack.Channel, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateConversationContext", ctx, params)
+	ret0, _ := ret[0].(*slack.Channel)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateConversationContext indicates an expected call of CreateConversationContext.
+func (mr *MockAPIClientMockRecorder) CreateConversationContext(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateConversationContext", reflect.TypeOf((*MockAPIClient)(nil).CreateConversationContext), ctx, params)
+}
+
 // CreateUserGroupContext mocks base method.
 func (m *MockAPIClient) CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup) (slack.UserGroup, error) {
 	m.ctrl.T.Helper()

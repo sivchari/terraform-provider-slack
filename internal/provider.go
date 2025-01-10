@@ -28,10 +28,13 @@ type APIClient interface {
 	// Conversations
 	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
+	CreateConversationContext(ctx context.Context, params slack.CreateConversationParams) (*slack.Channel, error)
 	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
 	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
 	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slack.Channel, error)
 	KickUserFromConversationContext(ctx context.Context, channelID string, user string) error
+	ArchiveConversationContext(ctx context.Context, channelID string) error
+	CloseConversationContext(ctx context.Context, channelID string) (noOp bool, alreadyClosed bool, err error)
 }
 
 type SlackProvider struct {
@@ -85,6 +88,7 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewResourceUserGroup,
+		NewResourceConversation,
 	}
 }
 
