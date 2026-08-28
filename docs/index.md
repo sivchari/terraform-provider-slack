@@ -18,3 +18,7 @@ description: |-
 ### Required
 
 - `token` (String, Sensitive)
+
+### Optional
+
+- `app_configuration_token` (String, Sensitive) App configuration token used for slack_app manifest calls. Since generating and rotating this token itself requires the Slack API, create a slack_app_config_token resource under a separately aliased provider instance (one with no app_configuration_token, to avoid a dependency cycle), then pass its token attribute here.
