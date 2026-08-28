@@ -1,80 +1,63 @@
-run:
-  timeout: 5m
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - shadow
-  misspell:
-    locale: US
-  lll:
-    line-length: 160
-  revive:
-    rules:
-      # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#var-naming
-      - name: var-naming
-  forbidigo:
-    forbid:
-      - t\.Fatal.*
-      - fmt\.Print.*
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
-    # Errcheck is a program for checking for unchecked errors in go programs.
-    # These unchecked errors can be critical bugs in some cases
-    - errcheck
-    # Linter for Go source code that specializes in simplifying a code
-    - gosimple
-    # Vet examines Go source code and reports suspicious constructs,
-    # such as Printf calls whose arguments do not align with the format string
-    - govet
-    # Forbids identifiers
-    - forbidigo
-    # Staticcheck is a go vet on steroids, applying a ton of static analysis checks
-    - staticcheck
-    # Like the front-end of a Go compiler, parses and type-checks Go code
-    - typecheck
-    # Checks Go code for unused constants, variables, functions and types
-    - unused
-    # checks whether HTTP response body is closed successfully
     - bodyclose
-    # containedctx is a linter that detects struct contained context.Context field
     - containedctx
-    # Checks that sentinel errors are prefixed with the Err and error types are suffixed with the Error.
+    - errcheck
     - errname
-    # checks for pointers to enclosing loop variables
-    - exportloopref
-    # Gofumpt checks whether code was gofumpt-ed.
-    - gofumpt
-    # Reports long lines
+    - forbidigo
+    - govet
     - lll
-    # Finds commonly misspelled English words in comments
     - misspell
-    # Finds naked returns in functions greater than a specified function length
     - nakedret
-    # paralleltest detects missing usage of t.Parallel() method in your Go test
     - paralleltest
-    # Finds slice declarations that could potentially be pre-allocated
     - prealloc
-    # find code that shadows one of Go's predeclared identifiers
     - predeclared
-    # Fast, configurable, extensible, flexible, and beautiful linter for Go. Drop-in replacement of golint
     - revive
-    # Stylecheck is a replacement for golint
-    - stylecheck
-    # tenv is analyzer that detects using os.Setenv instead of t.Setenv since Go1.17
-    - tenv
-
+    - staticcheck
+    - unused
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: t\.Fatal.*
+        - pattern: fmt\.Print.*
+    govet:
+      disable:
+        - shadow
+      enable-all: true
+    lll:
+      line-length: 160
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: var-naming
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - govet
+        path: \.go
+        text: 'fieldalignment:'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-use-default: true
-  max-per-linter: 0
+  max-issues-per-linter: 0
   max-same-issues: 0
-  exclude: []
-  exclude-rules:
-    # All
-    - path: \.go
-      text: "fieldalignment:"
-      linters:
-        - govet
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
