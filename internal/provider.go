@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 	"github.com/slack-go/slack"
 )
 
@@ -35,6 +36,12 @@ type APIClient interface {
 	KickUserFromConversationContext(ctx context.Context, channelID string, user string) error
 	ArchiveConversationContext(ctx context.Context, channelID string) error
 	CloseConversationContext(ctx context.Context, channelID string) (noOp bool, alreadyClosed bool, err error)
+	// App Manifests
+	CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error)
+	UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error)
+	ExportManifestContext(ctx context.Context, token, appID string) (*slack.Manifest, error)
+	DeleteManifestContext(ctx context.Context, token, appID string) (*slack.SlackResponse, error)
+	RotateTokensContext(ctx context.Context, configToken, refreshToken string) (*slack.TokenResponse, error)
 }
 
 type SlackProvider struct {
@@ -42,7 +49,8 @@ type SlackProvider struct {
 }
 
 type SlackProviderConfig struct {
-	Token types.String `tfsdk:"token"`
+	Token                 types.String `tfsdk:"token"`
+	AppConfigurationToken types.String `tfsdk:"app_configuration_token"`
 }
 
 func New() func() provider.Provider {
@@ -57,6 +65,15 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 			"token": schema.StringAttribute{
 				Required:  true,
 				Sensitive: true,
+			},
+			"app_configuration_token": schema.StringAttribute{
+				Optional:  true,
+				Sensitive: true,
+				Description: "App configuration token used for slack_app manifest calls. Since " +
+					"generating and rotating this token itself requires the Slack API, create a " +
+					"slack_app_config_token resource under a separately aliased provider instance " +
+					"(one with no app_configuration_token, to avoid a dependency cycle), then pass " +
+					"its token attribute here.",
 			},
 		},
 	}
@@ -73,12 +90,8 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if resp.Diagnostics.HasError() {
-		return
-	}
 	if m.client == nil {
-		client := slack.New(cfg.Token.String())
-		m.client = client
+		m.client = NewClient(cfg.Token.ValueString(), cfg.AppConfigurationToken.ValueString())
 	}
 	resp.DataSourceData = m.client
 	resp.ResourceData = m.client
@@ -89,6 +102,8 @@ func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource 
 	return []func() resource.Resource{
 		NewResourceUserGroup,
 		NewResourceConversation,
+		NewResourceApp,
+		NewResourceAppConfigToken,
 	}
 }
 
