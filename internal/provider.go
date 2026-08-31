@@ -42,6 +42,7 @@ type APIClient interface {
 	ExportManifestContext(ctx context.Context, token, appID string) (*slack.Manifest, error)
 	DeleteManifestContext(ctx context.Context, token, appID string) (*slack.SlackResponse, error)
 	RotateTokensContext(ctx context.Context, configToken, refreshToken string) (*slack.TokenResponse, error)
+	HasBotToken() bool
 }
 
 type SlackProvider struct {
@@ -63,8 +64,12 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"token": schema.StringAttribute{
-				Required:  true,
+				Optional:  true,
 				Sensitive: true,
+				Description: "Bot token required by the slack_usergroup and slack_conversation " +
+					"resources and the slack_user, slack_usergroup and slack_conversation data " +
+					"sources. Not needed when only managing slack_app manifests with " +
+					"app_configuration_token.",
 			},
 			"app_configuration_token": schema.StringAttribute{
 				Optional:  true,

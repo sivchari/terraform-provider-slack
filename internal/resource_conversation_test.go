@@ -33,6 +33,7 @@ func TestAccConversationResource(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	client := mock.NewMockAPIClient(ctrl)
 
+	client.EXPECT().HasBotToken().Return(true).AnyTimes()
 	client.EXPECT().CreateConversationContext(gomock.Any(), gomock.Any()).Return(&resp, nil).AnyTimes()
 	client.EXPECT().SetTopicOfConversationContext(gomock.Any(), "test", "test").Return(&resp, nil).AnyTimes()
 	client.EXPECT().SetPurposeOfConversationContext(gomock.Any(), "test", "test").Return(&resp, nil).AnyTimes()

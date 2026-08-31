@@ -243,6 +243,20 @@ func (mr *MockAPIClientMockRecorder) GetUsersInConversationContext(ctx, params a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUsersInConversationContext", reflect.TypeOf((*MockAPIClient)(nil).GetUsersInConversationContext), ctx, params)
 }
 
+// HasBotToken mocks base method.
+func (m *MockAPIClient) HasBotToken() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasBotToken")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasBotToken indicates an expected call of HasBotToken.
+func (mr *MockAPIClientMockRecorder) HasBotToken() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasBotToken", reflect.TypeOf((*MockAPIClient)(nil).HasBotToken))
+}
+
 // InviteUsersToConversationContext mocks base method.
 func (m *MockAPIClient) InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slack.Channel, error) {
 	m.ctrl.T.Helper()

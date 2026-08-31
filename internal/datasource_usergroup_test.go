@@ -36,6 +36,7 @@ func TestAccDataSourceUserGroup(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	client := mock.NewMockAPIClient(ctrl)
+	client.EXPECT().HasBotToken().Return(true).AnyTimes()
 	client.EXPECT().GetUserGroupsContext(gomock.Any(), gomock.Any()).Return(resp, nil).AnyTimes()
 
 	resource.UnitTest(t, resource.TestCase{

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -9,6 +10,27 @@ import (
 
 	"github.com/sivchari/terraform-provider-slack/internal/mock"
 )
+
+func TestAccUserGroupResourceMissingBotToken(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+	client.EXPECT().HasBotToken().Return(false).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfigNoToken + `
+resource "slack_usergroup" "test" {
+	name = "test"
+}`,
+				ExpectError: regexp.MustCompile(`The provider attribute "token" is required to use slack_usergroup`),
+			},
+		},
+	})
+}
 
 func TestAccUserGroupResource(t *testing.T) {
 	t.Parallel()
@@ -28,6 +50,7 @@ func TestAccUserGroupResource(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	client := mock.NewMockAPIClient(ctrl)
 
+	client.EXPECT().HasBotToken().Return(true).AnyTimes()
 	// TODO: make req's type more strict
 	client.EXPECT().CreateUserGroupContext(gomock.Any(), gomock.Any()).Return(resp, nil).AnyTimes()
 	client.EXPECT().DisableUserGroupContext(gomock.Any(), "test").Return(resp, nil).AnyTimes()

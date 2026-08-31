@@ -22,6 +22,7 @@ type Client struct {
 	httpClient  *http.Client
 	apiURL      string
 	configToken string
+	hasToken    bool
 }
 
 // NewClient builds a Client authenticated with the bot token, optionally
@@ -37,7 +38,13 @@ func NewClient(token, configurationToken string) *Client {
 		httpClient:  http.DefaultClient,
 		apiURL:      defaultManifestAPIURL,
 		configToken: configurationToken,
+		hasToken:    token != "",
 	}
+}
+
+// HasBotToken reports whether the client was configured with a bot token.
+func (c *Client) HasBotToken() bool {
+	return c.hasToken
 }
 
 // RotateTokensContext exchanges a refresh token for a new app configuration

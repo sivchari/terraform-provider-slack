@@ -40,6 +40,7 @@ func TestAccDataSourceConversation(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	client := mock.NewMockAPIClient(ctrl)
+	client.EXPECT().HasBotToken().Return(true).AnyTimes()
 	client.EXPECT().GetConversationInfoContext(gomock.Any(), &slack.GetConversationInfoInput{
 		ChannelID: "test",
 	}).Return(conversationInfoResp, nil).AnyTimes()

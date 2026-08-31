@@ -39,6 +39,7 @@ func TestAccDataSourceUser(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	client := mock.NewMockAPIClient(ctrl)
+	client.EXPECT().HasBotToken().Return(true).AnyTimes()
 	client.EXPECT().GetUserByEmailContext(gomock.Any(), "test@example.com").Return(resp, nil).AnyTimes()
 
 	resource.UnitTest(t, resource.TestCase{
