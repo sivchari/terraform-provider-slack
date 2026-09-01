@@ -47,20 +47,6 @@ func (c *Client) HasBotToken() bool {
 	return c.hasToken
 }
 
-// RotateTokensContext exchanges a refresh token for a new app configuration
-// token pair, and updates the client's default configuration token so
-// manifest calls made later through this same Client don't use a stale
-// token.
-func (c *Client) RotateTokensContext(ctx context.Context, configToken, refreshToken string) (*slack.TokenResponse, error) {
-	resp, err := c.Client.RotateTokensContext(ctx, configToken, refreshToken)
-	if err != nil {
-		return nil, err
-	}
-	c.configToken = resp.Token
-	c.UpdateConfigTokens(resp)
-	return resp, nil
-}
-
 type createAppManifestHTTPResponse struct {
 	appmanifest.CreateResponse
 	Ok    bool   `json:"ok"`
