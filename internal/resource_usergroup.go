@@ -143,7 +143,15 @@ func (r *ResourceUserGroup) Configure(ctx context.Context, req resource.Configur
 	if req.ProviderData == nil {
 		return
 	}
-	r.client = req.ProviderData.(APIClient)
+	client := req.ProviderData.(APIClient)
+	if !client.HasBotToken() {
+		res.Diagnostics.AddError(
+			"Missing bot token",
+			`The provider attribute "token" is required to use slack_usergroup. Set token in the provider configuration.`,
+		)
+		return
+	}
+	r.client = client
 }
 
 func (r *ResourceUserGroup) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {

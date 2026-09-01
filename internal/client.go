@@ -22,6 +22,7 @@ type Client struct {
 	httpClient  *http.Client
 	apiURL      string
 	configToken string
+	hasToken    bool
 }
 
 // NewClient builds a Client authenticated with the bot token, optionally
@@ -37,21 +38,13 @@ func NewClient(token, configurationToken string) *Client {
 		httpClient:  http.DefaultClient,
 		apiURL:      defaultManifestAPIURL,
 		configToken: configurationToken,
+		hasToken:    token != "",
 	}
 }
 
-// RotateTokensContext exchanges a refresh token for a new app configuration
-// token pair, and updates the client's default configuration token so
-// manifest calls made later through this same Client don't use a stale
-// token.
-func (c *Client) RotateTokensContext(ctx context.Context, configToken, refreshToken string) (*slack.TokenResponse, error) {
-	resp, err := c.Client.RotateTokensContext(ctx, configToken, refreshToken)
-	if err != nil {
-		return nil, err
-	}
-	c.configToken = resp.Token
-	c.UpdateConfigTokens(resp)
-	return resp, nil
+// HasBotToken reports whether the client was configured with a bot token.
+func (c *Client) HasBotToken() bool {
+	return c.hasToken
 }
 
 type createAppManifestHTTPResponse struct {

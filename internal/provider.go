@@ -41,7 +41,7 @@ type APIClient interface {
 	UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error)
 	ExportManifestContext(ctx context.Context, token, appID string) (*slack.Manifest, error)
 	DeleteManifestContext(ctx context.Context, token, appID string) (*slack.SlackResponse, error)
-	RotateTokensContext(ctx context.Context, configToken, refreshToken string) (*slack.TokenResponse, error)
+	HasBotToken() bool
 }
 
 type SlackProvider struct {
@@ -63,17 +63,20 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"token": schema.StringAttribute{
-				Required:  true,
+				Optional:  true,
 				Sensitive: true,
+				Description: "Bot token required by the slack_usergroup and slack_conversation " +
+					"resources and the slack_user, slack_usergroup and slack_conversation data " +
+					"sources. Not needed when only managing slack_app manifests with " +
+					"app_configuration_token.",
 			},
 			"app_configuration_token": schema.StringAttribute{
 				Optional:  true,
 				Sensitive: true,
-				Description: "App configuration token used for slack_app manifest calls. Since " +
-					"generating and rotating this token itself requires the Slack API, create a " +
-					"slack_app_config_token resource under a separately aliased provider instance " +
-					"(one with no app_configuration_token, to avoid a dependency cycle), then pass " +
-					"its token attribute here.",
+				Description: "App configuration token used for slack_app manifest calls. This token " +
+					"expires after 12 hours and must be rotated outside Terraform (for example, a " +
+					"scheduled job that calls tooling.tokens.rotate and writes the result to a " +
+					"secret store); inject a currently-valid token here, e.g. via a TF_VAR.",
 			},
 		},
 	}
@@ -103,7 +106,6 @@ func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewResourceUserGroup,
 		NewResourceConversation,
 		NewResourceApp,
-		NewResourceAppConfigToken,
 	}
 }
 

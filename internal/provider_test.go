@@ -10,6 +10,11 @@ const (
 provider "slack" {
 	token = "test"
 }`
+
+	providerConfigNoToken = `
+provider "slack" {
+	app_configuration_token = "test"
+}`
 )
 
 func protoV6ProviderFactories(client APIClient) map[string]func() (tfprotov6.ProviderServer, error) {

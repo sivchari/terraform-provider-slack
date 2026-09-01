@@ -121,7 +121,15 @@ func (d *DataSourceConversation) Configure(ctx context.Context, req datasource.C
 	if req.ProviderData == nil {
 		return
 	}
-	d.client = req.ProviderData.(APIClient)
+	client := req.ProviderData.(APIClient)
+	if !client.HasBotToken() {
+		res.Diagnostics.AddError(
+			"Missing bot token",
+			`The provider attribute "token" is required to use slack_conversation. Set token in the provider configuration.`,
+		)
+		return
+	}
+	d.client = client
 }
 
 func (d *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRequest, res *datasource.ReadResponse) {

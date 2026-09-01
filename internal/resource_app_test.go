@@ -52,8 +52,36 @@ func TestAccAppResource(t *testing.T) {
 	})
 }
 
+func TestAccAppResourceWithoutBotToken(t *testing.T) {
+	t.Parallel()
+
+	createResp := &appmanifest.CreateResponse{
+		AppID: "A012345678",
+	}
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfigNoToken + testAccAppResourceConfig(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+		},
+	})
+}
+
 func testAccAppResource() string {
-	return providerConfig + `
+	return providerConfig + testAccAppResourceConfig()
+}
+
+func testAccAppResourceConfig() string {
+	return `
 resource "slack_app" "test" {
 	display_information = {
 		name = "test"
