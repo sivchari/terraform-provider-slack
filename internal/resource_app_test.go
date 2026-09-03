@@ -1,9 +1,12 @@
 package internal
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/slack-go/slack"
 	"go.uber.org/mock/gomock"
 
@@ -29,6 +32,7 @@ func TestAccAppResource(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
+	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -63,6 +67,7 @@ func TestAccAppResourceWithoutBotToken(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
+	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -74,6 +79,148 @@ func TestAccAppResourceWithoutBotToken(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestAccAppResourceUpdate(t *testing.T) {
+	t.Parallel()
+
+	createResp := &appmanifest.CreateResponse{
+		AppID: "A012345678",
+		Credentials: appmanifest.Credentials{
+			ClientID:          "1234567890.1234567890123",
+			ClientSecret:      "abcdefghijklmnopqrstuvwxyz012345",
+			VerificationToken: "abcdefghijklmnopqrstuvwx",
+			SigningSecret:     "0123456789abcdef0123456789abcdef",
+		},
+		OAuthAuthorizeURL: "https://slack.com/oauth/v2/authorize?client_id=1234567890.1234567890123",
+	}
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	remote := testAccAppManifest("test")
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
+	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (*slack.Manifest, error) {
+			return remote, nil
+		},
+	).AnyTimes()
+	// The expectation pins the app_id argument: an unknown plan ID would reach
+	// Slack as "" and fail the test here.
+	client.EXPECT().UpdateManifestContext(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest *slack.Manifest, _, _ string) (*slack.UpdateManifestResponse, error) {
+			remote = manifest
+			return &slack.UpdateManifestResponse{}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config: testAccAppResourceRenamed(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+					resource.TestCheckResourceAttr("slack_app.test", "display_information.name", "test-renamed"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAppResourceRemoteDrift(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("drifted"), nil).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config:             testAccAppResource(),
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true,
+				Check:              resource.TestCheckResourceAttr("slack_app.test", "display_information.name", "drifted"),
+			},
+		},
+	})
+}
+
+func TestAccAppResourceRemovedRemotely(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(nil, slack.SlackErrorResponse{Err: "app_not_found"}).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				// The post-apply refresh drops the remotely deleted app from
+				// state, so the follow-up plan proposes recreating it.
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true,
+				Check: func(s *terraform.State) error {
+					if _, ok := s.RootModule().Resources["slack_app.test"]; ok {
+						return fmt.Errorf("slack_app.test still in state, want it removed")
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+func testAccAppManifest(name string) *slack.Manifest {
+	return &slack.Manifest{
+		Display: slack.Display{Name: name},
+		Features: slack.Features{
+			BotUser: slack.BotUser{DisplayName: "test-bot"},
+		},
+		OAuthConfig: slack.OAuthConfig{
+			Scopes: slack.OAuthScopes{Bot: []string{"chat:write"}},
+		},
+	}
+}
+
+func testAccAppResourceRenamed() string {
+	return providerConfig + `
+resource "slack_app" "test" {
+	display_information = {
+		name = "test-renamed"
+	}
+	features = {
+		bot_user = {
+			display_name = "test-bot"
+		}
+	}
+	oauth_config = {
+		scopes = {
+			bot = ["chat:write"]
+		}
+	}
+}`
 }
 
 func testAccAppResource() string {

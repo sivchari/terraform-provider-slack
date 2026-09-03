@@ -8,7 +8,14 @@ description: |-
 
 # slack_app (Resource)
 
+Manages a Slack app through its app manifest.
 
+Existing apps can be imported with their app ID (for example
+`terraform import slack_app.example A0123456789`). The credential
+attributes (`client_id`, `client_secret`, `verification_token`,
+`signing_secret`, `oauth_authorize_url`) are only returned by
+`apps.manifest.create` and cannot be recovered afterwards, so they stay
+null for imported apps.
 
 
 
