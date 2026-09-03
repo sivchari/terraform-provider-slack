@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 	"github.com/slack-go/slack"
@@ -61,35 +63,17 @@ func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest
 		token = c.configToken
 	}
 
-	body, err := json.Marshal(manifest)
+	body, err := marshalManifest(manifest)
 	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
+		return nil, err
 	}
 
-	values := url.Values{
+	raw, err := c.postManifestMethod(ctx, "apps.manifest.create", url.Values{
 		"token":    {token},
 		"manifest": {string(body)},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL+"apps.manifest.create", bytes.NewBufferString(values.Encode()))
+	})
 	if err != nil {
-		return nil, fmt.Errorf("build apps.manifest.create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	httpResp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call apps.manifest.create: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	raw, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read apps.manifest.create response: %w", err)
-	}
-
-	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("apps.manifest.create: unexpected status %d: %s", httpResp.StatusCode, raw)
+		return nil, err
 	}
 
 	var resp createAppManifestHTTPResponse
@@ -98,11 +82,136 @@ func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest
 	}
 
 	if !resp.Ok {
-		if len(resp.Errors) > 0 {
-			return nil, fmt.Errorf("apps.manifest.create: %s: %+v", resp.Error, resp.Errors)
-		}
-		return nil, fmt.Errorf("apps.manifest.create: %s", resp.Error)
+		return nil, manifestAPIError("apps.manifest.create", resp.Error, resp.Errors)
 	}
 
 	return &resp.CreateResponse, nil
+}
+
+// UpdateManifestContext updates an app manifest via a raw HTTP call to
+// apps.manifest.update, shadowing the embedded slack.Client method: the
+// request body must omit empty manifest objects (see marshalManifest) and
+// Slack's validation errors have to reach the caller instead of being reduced
+// to a bare error code.
+func (c *Client) UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error) {
+	if token == "" {
+		token = c.configToken
+	}
+
+	body, err := marshalManifest(manifest)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := c.postManifestMethod(ctx, "apps.manifest.update", url.Values{
+		"token":    {token},
+		"app_id":   {appID},
+		"manifest": {string(body)},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp slack.UpdateManifestResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decode apps.manifest.update response: %w", err)
+	}
+
+	if !resp.Ok {
+		return nil, manifestAPIError("apps.manifest.update", resp.Error, resp.Errors)
+	}
+
+	return &resp, nil
+}
+
+func (c *Client) postManifestMethod(ctx context.Context, method string, values url.Values) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL+method, bytes.NewBufferString(values.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build %s request: %w", method, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpResp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call %s: %w", method, err)
+	}
+	defer httpResp.Body.Close()
+
+	raw, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", method, err)
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: unexpected status %d: %s", method, httpResp.StatusCode, raw)
+	}
+
+	return raw, nil
+}
+
+// manifestAPIError formats a manifest API failure with one pointer: message
+// line per validation error, so users can see which part of the manifest
+// Slack rejected instead of just an error code.
+func manifestAPIError(method, code string, errs []slack.ManifestValidationError) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s", method, code)
+	for _, e := range errs {
+		fmt.Fprintf(&b, "\n%s: %s", e.Pointer, e.Message)
+	}
+	return errors.New(b.String())
+}
+
+// marshalManifest encodes the manifest, dropping objects that encoding/json
+// cannot omit because slack.Manifest nests value structs: empty objects
+// (recursively), a bot_user carrying only an empty display_name, and an
+// interactivity carrying only is_enabled=false. Slack treats an absent key
+// and its zero form the same, except for event_subscriptions, where {} is
+// rejected whenever Socket Mode is disabled.
+func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("marshal manifest: %w", err)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("reparse manifest: %w", err)
+	}
+	pruneZeroObjects(doc)
+
+	normalized, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal normalized manifest: %w", err)
+	}
+	return normalized, nil
+}
+
+func pruneZeroObjects(doc map[string]any) {
+	for key, value := range doc {
+		child, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		pruneZeroObjects(child)
+		if isZeroManifestObject(key, child) {
+			delete(doc, key)
+		}
+	}
+}
+
+func isZeroManifestObject(key string, obj map[string]any) bool {
+	switch len(obj) {
+	case 0:
+		return true
+	case 1:
+		switch key {
+		case "interactivity":
+			enabled, ok := obj["is_enabled"].(bool)
+			return ok && !enabled
+		case "bot_user":
+			name, ok := obj["display_name"].(string)
+			return ok && name == ""
+		}
+	}
+	return false
 }
