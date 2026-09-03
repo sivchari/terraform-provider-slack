@@ -202,7 +202,8 @@ func TestMarshalManifest(t *testing.T) {
 					SocketModeEnabled: true,
 				},
 			},
-			want: `{"display_information":{"name":"test"},"features":{"bot_user":{"display_name":"bot"}},"settings":{"interactivity":{"is_enabled":true,"request_url":"https://example.com/i"},"socket_mode_enabled":true}}`,
+			want: `{"display_information":{"name":"test"},"features":{"bot_user":{"display_name":"bot"}},` +
+				`"settings":{"interactivity":{"is_enabled":true,"request_url":"https://example.com/i"},"socket_mode_enabled":true}}`,
 		},
 	}
 

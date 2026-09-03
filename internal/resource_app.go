@@ -829,7 +829,3 @@ func stringsFromList(ctx context.Context, list types.List) ([]string, diag.Diagn
 	diags := list.ElementsAs(ctx, &out, false)
 	return out, diags
 }
-
-func listFromStrings(ctx context.Context, values []string) (types.List, diag.Diagnostics) {
-	return types.ListValueFrom(ctx, types.StringType, values)
-}
