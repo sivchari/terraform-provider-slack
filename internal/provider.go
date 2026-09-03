@@ -4,6 +4,7 @@ package internal
 
 import (
 	"context"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -68,7 +69,8 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 				Description: "Bot token required by the slack_usergroup and slack_conversation " +
 					"resources and the slack_user, slack_usergroup and slack_conversation data " +
 					"sources. Not needed when only managing slack_app manifests with " +
-					"app_configuration_token.",
+					"app_configuration_token. Falls back to the SLACK_TOKEN environment " +
+					"variable when unset.",
 			},
 			"app_configuration_token": schema.StringAttribute{
 				Optional:  true,
@@ -76,7 +78,10 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 				Description: "App configuration token used for slack_app manifest calls. This token " +
 					"expires after 12 hours and must be rotated outside Terraform (for example, a " +
 					"scheduled job that calls tooling.tokens.rotate and writes the result to a " +
-					"secret store); inject a currently-valid token here, e.g. via a TF_VAR.",
+					"secret store). Falls back to the SLACK_APP_CONFIGURATION_TOKEN environment " +
+					"variable when unset; prefer the environment variable over a TF_VAR in saved-plan " +
+					"workflows, since values set here are captured in the plan file at plan time and " +
+					"may expire before apply.",
 			},
 		},
 	}
@@ -93,8 +98,16 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	token := cfg.Token.ValueString()
+	if token == "" {
+		token = os.Getenv("SLACK_TOKEN")
+	}
+	appConfigToken := cfg.AppConfigurationToken.ValueString()
+	if appConfigToken == "" {
+		appConfigToken = os.Getenv("SLACK_APP_CONFIGURATION_TOKEN")
+	}
 	if m.client == nil {
-		m.client = NewClient(cfg.Token.ValueString(), cfg.AppConfigurationToken.ValueString())
+		m.client = NewClient(token, appConfigToken)
 	}
 	resp.DataSourceData = m.client
 	resp.ResourceData = m.client
