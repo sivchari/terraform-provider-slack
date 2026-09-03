@@ -508,88 +508,175 @@ func manifestFromState(ctx context.Context, state ResourceAppState) (*slack.Mani
 	return manifest, diags
 }
 
+// stateFromManifest maps an exported manifest onto state. Zero values from
+// the manifest (Slack omits unset fields, which decode to "" / false / empty)
+// are normalized against the prior state: they stay null when the prior value
+// was null or absent, and keep the prior's explicit zero form ("" / false)
+// otherwise. Without this, a config that omits an optional attribute would
+// show a permanent diff against the refreshed state.
 func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing ResourceAppState) (ResourceAppState, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	state := existing
+
+	priorDisplay := existing.DisplayInformation
+	if priorDisplay == nil {
+		priorDisplay = &AppDisplayInformation{}
+	}
 	state.DisplayInformation = &AppDisplayInformation{
 		Name:            types.StringValue(manifest.Display.Name),
-		Description:     types.StringValue(manifest.Display.Description),
-		LongDescription: types.StringValue(manifest.Display.LongDescription),
-		BackgroundColor: types.StringValue(manifest.Display.BackgroundColor),
+		Description:     normString(manifest.Display.Description, priorDisplay.Description),
+		LongDescription: normString(manifest.Display.LongDescription, priorDisplay.LongDescription),
+		BackgroundColor: normString(manifest.Display.BackgroundColor, priorDisplay.BackgroundColor),
 	}
 
-	features := &AppFeatures{
-		Shortcuts:     shortcutsToState(manifest.Features.Shortcuts),
-		SlashCommands: slashCommandsToState(manifest.Features.SlashCommands),
-		WorkflowSteps: workflowStepsToState(manifest.Features.WorkflowSteps),
+	priorFeatures := existing.Features
+	pf := priorFeatures
+	if pf == nil {
+		pf = &AppFeatures{}
 	}
-	if !isZeroAppHome(manifest.Features.AppHome) {
+	features := &AppFeatures{
+		Shortcuts:     shortcutsToState(manifest.Features.Shortcuts, pf.Shortcuts),
+		SlashCommands: slashCommandsToState(manifest.Features.SlashCommands, pf.SlashCommands),
+		WorkflowSteps: workflowStepsToState(manifest.Features.WorkflowSteps, pf.WorkflowSteps),
+	}
+	if !isZeroAppHome(manifest.Features.AppHome) || pf.AppHome != nil {
+		priorAppHome := pf.AppHome
+		if priorAppHome == nil {
+			priorAppHome = &AppHome{}
+		}
 		features.AppHome = &AppHome{
-			HomeTabEnabled:             types.BoolValue(manifest.Features.AppHome.HomeTabEnabled),
-			MessagesTabEnabled:         types.BoolValue(manifest.Features.AppHome.MessagesTabEnabled),
-			MessagesTabReadOnlyEnabled: types.BoolValue(manifest.Features.AppHome.MessagesTabReadOnlyEnabled),
+			HomeTabEnabled:             normBool(manifest.Features.AppHome.HomeTabEnabled, priorAppHome.HomeTabEnabled),
+			MessagesTabEnabled:         normBool(manifest.Features.AppHome.MessagesTabEnabled, priorAppHome.MessagesTabEnabled),
+			MessagesTabReadOnlyEnabled: normBool(manifest.Features.AppHome.MessagesTabReadOnlyEnabled, priorAppHome.MessagesTabReadOnlyEnabled),
 		}
 	}
-	if !isZeroBotUser(manifest.Features.BotUser) {
+	if !isZeroBotUser(manifest.Features.BotUser) || pf.BotUser != nil {
+		priorBotUser := pf.BotUser
+		if priorBotUser == nil {
+			priorBotUser = &AppBotUser{}
+		}
 		features.BotUser = &AppBotUser{
 			DisplayName:  types.StringValue(manifest.Features.BotUser.DisplayName),
-			AlwaysOnline: types.BoolValue(manifest.Features.BotUser.AlwaysOnline),
+			AlwaysOnline: normBool(manifest.Features.BotUser.AlwaysOnline, priorBotUser.AlwaysOnline),
 		}
 	}
-	state.Features = features
+	if priorFeatures == nil && features.AppHome == nil && features.BotUser == nil &&
+		features.Shortcuts == nil && features.SlashCommands == nil && features.WorkflowSteps == nil {
+		state.Features = nil
+	} else {
+		state.Features = features
+	}
 
-	if len(manifest.OAuthConfig.RedirectUrls) == 0 && isZeroOAuthScopes(manifest.OAuthConfig.Scopes) {
+	priorOAuth := existing.OAuthConfig
+	if len(manifest.OAuthConfig.RedirectUrls) == 0 && isZeroOAuthScopes(manifest.OAuthConfig.Scopes) && priorOAuth == nil {
 		state.OAuthConfig = nil
 	} else {
-		redirectURLs, d := listFromStrings(ctx, manifest.OAuthConfig.RedirectUrls)
+		po := priorOAuth
+		if po == nil {
+			po = &AppOAuthConfig{}
+		}
+		redirectURLs, d := normList(ctx, manifest.OAuthConfig.RedirectUrls, po.RedirectURLs)
 		diags.Append(d...)
 		oauthConfig := &AppOAuthConfig{RedirectURLs: redirectURLs}
-		if !isZeroOAuthScopes(manifest.OAuthConfig.Scopes) {
-			bot, d := listFromStrings(ctx, manifest.OAuthConfig.Scopes.Bot)
+		if !isZeroOAuthScopes(manifest.OAuthConfig.Scopes) || po.Scopes != nil {
+			priorScopes := po.Scopes
+			if priorScopes == nil {
+				priorScopes = &AppOAuthScopes{}
+			}
+			bot, d := normList(ctx, manifest.OAuthConfig.Scopes.Bot, priorScopes.Bot)
 			diags.Append(d...)
-			user, d := listFromStrings(ctx, manifest.OAuthConfig.Scopes.User)
+			user, d := normList(ctx, manifest.OAuthConfig.Scopes.User, priorScopes.User)
 			diags.Append(d...)
 			oauthConfig.Scopes = &AppOAuthScopes{Bot: bot, User: user}
 		}
 		state.OAuthConfig = oauthConfig
 	}
 
+	priorSettings := existing.Settings
 	eventsZero := isZeroEventSubscriptions(manifest.Settings.EventSubscriptions)
 	interactivityZero := isZeroInteractivity(manifest.Settings.Interactivity)
 	if len(manifest.Settings.AllowedIPAddressRanges) == 0 && !manifest.Settings.OrgDeployEnabled &&
-		!manifest.Settings.SocketModeEnabled && eventsZero && interactivityZero {
+		!manifest.Settings.SocketModeEnabled && eventsZero && interactivityZero && priorSettings == nil {
 		state.Settings = nil
 	} else {
-		allowedIPs, d := listFromStrings(ctx, manifest.Settings.AllowedIPAddressRanges)
+		ps := priorSettings
+		if ps == nil {
+			ps = &AppSettings{}
+		}
+		allowedIPs, d := normList(ctx, manifest.Settings.AllowedIPAddressRanges, ps.AllowedIPAddressRanges)
 		diags.Append(d...)
 		settings := &AppSettings{
 			AllowedIPAddressRanges: allowedIPs,
-			OrgDeployEnabled:       types.BoolValue(manifest.Settings.OrgDeployEnabled),
-			SocketModeEnabled:      types.BoolValue(manifest.Settings.SocketModeEnabled),
+			OrgDeployEnabled:       normBool(manifest.Settings.OrgDeployEnabled, ps.OrgDeployEnabled),
+			SocketModeEnabled:      normBool(manifest.Settings.SocketModeEnabled, ps.SocketModeEnabled),
 		}
-		if !eventsZero {
-			botEvents, d := listFromStrings(ctx, manifest.Settings.EventSubscriptions.BotEvents)
+		if !eventsZero || ps.EventSubscriptions != nil {
+			priorEvents := ps.EventSubscriptions
+			if priorEvents == nil {
+				priorEvents = &AppEventSubscriptions{}
+			}
+			botEvents, d := normList(ctx, manifest.Settings.EventSubscriptions.BotEvents, priorEvents.BotEvents)
 			diags.Append(d...)
-			userEvents, d := listFromStrings(ctx, manifest.Settings.EventSubscriptions.UserEvents)
+			userEvents, d := normList(ctx, manifest.Settings.EventSubscriptions.UserEvents, priorEvents.UserEvents)
 			diags.Append(d...)
 			settings.EventSubscriptions = &AppEventSubscriptions{
-				RequestURL: types.StringValue(manifest.Settings.EventSubscriptions.RequestUrl),
+				RequestURL: normString(manifest.Settings.EventSubscriptions.RequestUrl, priorEvents.RequestURL),
 				BotEvents:  botEvents,
 				UserEvents: userEvents,
 			}
 		}
-		if !interactivityZero {
+		if !interactivityZero || ps.Interactivity != nil {
+			priorInteractivity := ps.Interactivity
+			if priorInteractivity == nil {
+				priorInteractivity = &AppInteractivity{}
+			}
 			settings.Interactivity = &AppInteractivity{
 				IsEnabled:             types.BoolValue(manifest.Settings.Interactivity.IsEnabled),
-				RequestURL:            types.StringValue(manifest.Settings.Interactivity.RequestUrl),
-				MessageMenuOptionsURL: types.StringValue(manifest.Settings.Interactivity.MessageMenuOptionsUrl),
+				RequestURL:            normString(manifest.Settings.Interactivity.RequestUrl, priorInteractivity.RequestURL),
+				MessageMenuOptionsURL: normString(manifest.Settings.Interactivity.MessageMenuOptionsUrl, priorInteractivity.MessageMenuOptionsURL),
 			}
 		}
 		state.Settings = settings
 	}
 
 	return state, diags
+}
+
+// normString keeps a non-empty remote value, preserves a prior explicit ""
+// and otherwise normalizes "" to null.
+func normString(remote string, prior types.String) types.String {
+	if remote != "" {
+		return types.StringValue(remote)
+	}
+	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueString() == "" {
+		return prior
+	}
+	return types.StringNull()
+}
+
+// normBool keeps a true remote value, preserves a prior known value for a
+// false remote and otherwise normalizes false to null.
+func normBool(remote bool, prior types.Bool) types.Bool {
+	if remote {
+		return types.BoolValue(true)
+	}
+	if prior.IsNull() || prior.IsUnknown() {
+		return types.BoolNull()
+	}
+	return types.BoolValue(false)
+}
+
+// normList keeps a non-empty remote list, preserves a prior explicit empty
+// list and otherwise normalizes empty to null.
+func normList(ctx context.Context, remote []string, prior types.List) (types.List, diag.Diagnostics) {
+	if len(remote) > 0 {
+		return types.ListValueFrom(ctx, types.StringType, remote)
+	}
+	if !prior.IsNull() && !prior.IsUnknown() && len(prior.Elements()) == 0 {
+		return prior, nil
+	}
+	return types.ListNull(types.StringType), nil
 }
 
 func isZeroAppHome(h slack.AppHome) bool {
@@ -625,7 +712,13 @@ func shortcutsFromState(shortcuts []AppShortcut) []slack.Shortcut {
 	return out
 }
 
-func shortcutsToState(shortcuts []slack.Shortcut) []AppShortcut {
+func shortcutsToState(shortcuts []slack.Shortcut, prior []AppShortcut) []AppShortcut {
+	if len(shortcuts) == 0 {
+		if prior != nil && len(prior) == 0 {
+			return prior
+		}
+		return nil
+	}
 	out := make([]AppShortcut, 0, len(shortcuts))
 	for _, s := range shortcuts {
 		out = append(out, AppShortcut{
@@ -652,15 +745,25 @@ func slashCommandsFromState(commands []AppSlashCommand) []slack.ManifestSlashCom
 	return out
 }
 
-func slashCommandsToState(commands []slack.ManifestSlashCommand) []AppSlashCommand {
+func slashCommandsToState(commands []slack.ManifestSlashCommand, prior []AppSlashCommand) []AppSlashCommand {
+	if len(commands) == 0 {
+		if prior != nil && len(prior) == 0 {
+			return prior
+		}
+		return nil
+	}
 	out := make([]AppSlashCommand, 0, len(commands))
-	for _, c := range commands {
+	for i, c := range commands {
+		var p AppSlashCommand
+		if i < len(prior) {
+			p = prior[i]
+		}
 		out = append(out, AppSlashCommand{
 			Command:      types.StringValue(c.Command),
 			Description:  types.StringValue(c.Description),
-			ShouldEscape: types.BoolValue(c.ShouldEscape),
-			URL:          types.StringValue(c.Url),
-			UsageHint:    types.StringValue(c.UsageHint),
+			ShouldEscape: normBool(c.ShouldEscape, p.ShouldEscape),
+			URL:          normString(c.Url, p.URL),
+			UsageHint:    normString(c.UsageHint, p.UsageHint),
 		})
 	}
 	return out
@@ -677,7 +780,13 @@ func workflowStepsFromState(steps []AppWorkflowStep) []slack.WorkflowStep {
 	return out
 }
 
-func workflowStepsToState(steps []slack.WorkflowStep) []AppWorkflowStep {
+func workflowStepsToState(steps []slack.WorkflowStep, prior []AppWorkflowStep) []AppWorkflowStep {
+	if len(steps) == 0 {
+		if prior != nil && len(prior) == 0 {
+			return prior
+		}
+		return nil
+	}
 	out := make([]AppWorkflowStep, 0, len(steps))
 	for _, s := range steps {
 		out = append(out, AppWorkflowStep{
