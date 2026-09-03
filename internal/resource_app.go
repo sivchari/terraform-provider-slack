@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
 )
@@ -127,25 +128,31 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"client_id": schema.StringAttribute{
-				Computed: true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"client_secret": schema.StringAttribute{
-				Computed:  true,
-				Sensitive: true,
+				Computed:      true,
+				Sensitive:     true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"verification_token": schema.StringAttribute{
-				Computed:  true,
-				Sensitive: true,
+				Computed:      true,
+				Sensitive:     true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"signing_secret": schema.StringAttribute{
-				Computed:  true,
-				Sensitive: true,
+				Computed:      true,
+				Sensitive:     true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"oauth_authorize_url": schema.StringAttribute{
-				Computed: true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{createOnlyString()},
 			},
 			"display_information": schema.SingleNestedAttribute{
 				Required: true,
