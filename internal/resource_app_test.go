@@ -76,6 +76,66 @@ func TestAccAppResourceWithoutBotToken(t *testing.T) {
 	})
 }
 
+func TestAccAppResourceUpdate(t *testing.T) {
+	t.Parallel()
+
+	createResp := &appmanifest.CreateResponse{
+		AppID: "A012345678",
+		Credentials: appmanifest.Credentials{
+			ClientID:          "1234567890.1234567890123",
+			ClientSecret:      "abcdefghijklmnopqrstuvwxyz012345",
+			VerificationToken: "abcdefghijklmnopqrstuvwx",
+			SigningSecret:     "0123456789abcdef0123456789abcdef",
+		},
+		OAuthAuthorizeURL: "https://slack.com/oauth/v2/authorize?client_id=1234567890.1234567890123",
+	}
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
+	// The expectation pins the app_id argument: an unknown plan ID would reach
+	// Slack as "" and fail the test here.
+	client.EXPECT().UpdateManifestContext(gomock.Any(), gomock.Any(), "", "A012345678").Return(&slack.UpdateManifestResponse{}, nil).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config: testAccAppResourceRenamed(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+					resource.TestCheckResourceAttr("slack_app.test", "display_information.name", "test-renamed"),
+				),
+			},
+		},
+	})
+}
+
+func testAccAppResourceRenamed() string {
+	return providerConfig + `
+resource "slack_app" "test" {
+	display_information = {
+		name = "test-renamed"
+	}
+	features = {
+		bot_user = {
+			display_name = "test-bot"
+		}
+	}
+	oauth_config = {
+		scopes = {
+			bot = ["chat:write"]
+		}
+	}
+}`
+}
+
 func testAccAppResource() string {
 	return providerConfig + testAccAppResourceConfig()
 }

@@ -359,17 +359,28 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
+	// The app ID must come from state: computed attributes without a plan
+	// modifier are unknown in the plan, and an unknown types.String yields ""
+	// which Slack rejects with invalid_arguments.
+	var state ResourceAppState
+	diags = req.State.Get(ctx, &state)
+	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+
 	manifest, diags := manifestFromState(ctx, plan)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
 
-	if _, err := r.client.UpdateManifestContext(ctx, manifest, "", plan.ID.ValueString()); err != nil {
+	if _, err := r.client.UpdateManifestContext(ctx, manifest, "", state.ID.ValueString()); err != nil {
 		res.Diagnostics.AddError("failed to update app", err.Error())
 		return
 	}
 
+	plan.ID = state.ID
 	diags = res.State.Set(ctx, &plan)
 	res.Diagnostics.Append(diags...)
 }
