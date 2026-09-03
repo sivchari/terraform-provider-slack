@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -354,8 +355,31 @@ func (r *ResourceApp) Read(ctx context.Context, req resource.ReadRequest, res *r
 	if res.Diagnostics.HasError() {
 		return
 	}
-	diags = res.State.Set(ctx, &state)
+
+	manifest, err := r.client.ExportManifestContext(ctx, "", state.ID.ValueString())
+	if err != nil {
+		if isAppNotFound(err) {
+			res.State.RemoveResource(ctx)
+			return
+		}
+		res.Diagnostics.AddError("failed to export app manifest", err.Error())
+		return
+	}
+
+	newState, diags := stateFromManifest(ctx, manifest, state)
 	res.Diagnostics.Append(diags...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+	diags = res.State.Set(ctx, &newState)
+	res.Diagnostics.Append(diags...)
+}
+
+// isAppNotFound reports whether err is Slack's app_not_found, returned by
+// apps.manifest.export when the app does not exist or has been deleted.
+func isAppNotFound(err error) bool {
+	var slackErr slack.SlackErrorResponse
+	return errors.As(err, &slackErr) && slackErr.Err == "app_not_found"
 }
 
 func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
