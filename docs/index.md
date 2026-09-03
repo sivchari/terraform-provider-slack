@@ -17,5 +17,5 @@ description: |-
 
 ### Optional
 
-- `app_configuration_token` (String, Sensitive) App configuration token used for slack_app manifest calls. This token expires after 12 hours and must be rotated outside Terraform (for example, a scheduled job that calls tooling.tokens.rotate and writes the result to a secret store); inject a currently-valid token here, e.g. via a TF_VAR.
-- `token` (String, Sensitive) Bot token required by the slack_usergroup and slack_conversation resources and the slack_user, slack_usergroup and slack_conversation data sources. Not needed when only managing slack_app manifests with app_configuration_token.
+- `app_configuration_token` (String, Sensitive) App configuration token used for slack_app manifest calls. This token expires after 12 hours and must be rotated outside Terraform (for example, a scheduled job that calls tooling.tokens.rotate and writes the result to a secret store). Falls back to the SLACK_APP_CONFIGURATION_TOKEN environment variable when unset; prefer the environment variable over a TF_VAR in saved-plan workflows, since values set here are captured in the plan file at plan time and may expire before apply.
+- `token` (String, Sensitive) Bot token required by the slack_usergroup and slack_conversation resources and the slack_user, slack_usergroup and slack_conversation data sources. Not needed when only managing slack_app manifests with app_configuration_token. Falls back to the SLACK_TOKEN environment variable when unset.
