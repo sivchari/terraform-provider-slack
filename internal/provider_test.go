@@ -80,11 +80,13 @@ func TestConfigure_TokenEnvFallback(t *testing.T) {
 			}, &resp)
 
 			if resp.Diagnostics.HasError() {
-				t.Fatalf("Configure() diagnostics: %v", resp.Diagnostics)
+				t.Errorf("Configure() diagnostics: %v", resp.Diagnostics)
+				return
 			}
 			c, ok := p.client.(*Client)
 			if !ok {
-				t.Fatalf("client = %T, want *Client", p.client)
+				t.Errorf("client = %T, want *Client", p.client)
+				return
 			}
 			if c.hasToken != tt.wantHasToken {
 				t.Errorf("hasToken = %v, want %v", c.hasToken, tt.wantHasToken)
