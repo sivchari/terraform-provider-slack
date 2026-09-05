@@ -123,10 +123,8 @@ func TestClientUpdateAppManifest(t *testing.T) {
 			"event_subscriptions": map[string]any{},
 			"interactivity":       map[string]any{"is_enabled": false},
 		},
-		// An unmanaged nested empty object, the way a platform app's
-		// function output_parameters.properties appears in an export:
-		// UpdateAppManifest must send the document back exactly as given,
-		// zero forms and all, and leave any cleanup to mergeManifest.
+		// an unmanaged nested empty object, as a platform app's export has;
+		// the document must be sent exactly as given
 		"functions": map[string]any{
 			"f": map[string]any{
 				"output_parameters": map[string]any{"properties": map[string]any{}},

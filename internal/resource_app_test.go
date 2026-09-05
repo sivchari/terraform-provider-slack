@@ -58,9 +58,8 @@ func TestAccAppResource(t *testing.T) {
 				ResourceName:      "slack_app.test",
 				ImportState:       true,
 				ImportStateVerify: true,
-				// Credentials are only returned by apps.manifest.create and
-				// cannot be recovered through import, so they are null on
-				// the imported resource by design.
+				// credentials are only returned by apps.manifest.create and
+				// stay null after an import
 				ImportStateVerifyIgnore: []string{
 					"client_id",
 					"client_secret",
@@ -281,10 +280,8 @@ func TestAccAppResourceUpdateAppDeletedRemotely(t *testing.T) {
 	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
 		func(context.Context, string, string) (appmanifest.Document, error) {
 			exportCalls++
-			// The first calls are the post-apply refresh of step 1 and the
-			// pre-plan refresh of step 2; both need a real document so the
-			// test reaches Update's own export call, which is call 3 and
-			// must fail with app_not_found.
+			// Calls 1 and 2 are the refreshes after step 1 and before step
+			// 2's plan; call 3 is Update's own export and must fail.
 			if exportCalls <= 2 {
 				return remote, nil
 			}
@@ -322,8 +319,8 @@ func TestAccAppResourceUpdatePreservesUnmanagedFields(t *testing.T) {
 	remote["_metadata"] = map[string]any{"major_version": float64(1), "minor_version": float64(1)}
 	remote["features"].(map[string]any)["unfurl_domains"] = []any{"example.com"}
 	remote["settings"] = map[string]any{"token_rotation_enabled": false}
-	// A platform app's function output, kept as an unmanaged nested empty
-	// object: pruning must never reach into it, since {} is meaningful here.
+	// an unmanaged nested empty object, meaningful to Slack, that no
+	// pruning may reach
 	originalFunctions := map[string]any{
 		"f": map[string]any{"output_parameters": map[string]any{"properties": map[string]any{}}},
 	}

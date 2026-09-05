@@ -87,14 +87,11 @@ func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest
 }
 
 // UpdateAppManifest replaces an app manifest via a raw HTTP call to
-// apps.manifest.update. The endpoint has PUT semantics, so the document is
-// expected to be the exported manifest with the managed fields overlaid
-// (see mergeManifest). It is marshaled verbatim: mergeManifest's result
-// carries fields outside the schema copied straight from the export, and
-// pruning those generically would silently drop meaningful empty objects
-// (see mergeManifest's own ancestor-scoped cleanup instead). Slack's
-// validation errors reach the caller instead of being reduced to a bare
-// error code.
+// apps.manifest.update. The document is the exported manifest with the
+// managed fields overlaid (see mergeManifest) and is sent as-is: it carries
+// fields this provider does not model, so nothing here may prune it.
+// Slack's validation errors reach the caller instead of being reduced to a
+// bare error code.
 func (c *Client) UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error) {
 	if token == "" {
 		token = c.configToken
@@ -186,14 +183,12 @@ func (c *Client) postManifestMethod(ctx context.Context, method string, values u
 	return raw, nil
 }
 
-// marshalManifest encodes a typed manifest for apps.manifest.create. The
-// document is built entirely from the plan (via appmanifest.NewDocument),
-// so pruneZeroObjects can safely clean up, recursively, the zero-form
-// objects encoding/json cannot omit because slack.Manifest nests value
-// structs: empty objects, a bot_user carrying only an empty display_name,
-// and an interactivity carrying only is_enabled=false. Slack treats an
-// absent key and its zero form the same, except for event_subscriptions,
-// where {} is rejected whenever Socket Mode is disabled.
+// marshalManifest encodes the manifest for apps.manifest.create, dropping
+// objects that encoding/json cannot omit because slack.Manifest nests value
+// structs: empty objects (recursively), a bot_user carrying only an empty
+// display_name, and an interactivity carrying only is_enabled=false. Slack
+// treats an absent key and its zero form the same, except for
+// event_subscriptions, where {} is rejected whenever Socket Mode is disabled.
 func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
 	doc, err := appmanifest.NewDocument(manifest)
 	if err != nil {
@@ -208,15 +203,8 @@ func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
 	return body, nil
 }
 
-// pruneZeroObjects removes, recursively, every empty object in doc, plus a
-// bot_user carrying only an empty display_name and an interactivity
-// carrying only is_enabled=false (see isZeroManifestObject). It is meant
-// for a document built entirely from a schema plan (marshalManifest's
-// Create path, and the planned document mergeManifest is given), where
-// these can only be zero structs encoding/json cannot omit. Do not run it
-// over a document that also carries fields outside the schema, such as the
-// merged document mergeManifest produces or an exported manifest: use
-// mergeManifest's ancestor-scoped cleanup for that instead.
+// pruneZeroObjects is only safe on a document built from the plan: an
+// exported manifest may carry meaningful empty objects outside the schema.
 func pruneZeroObjects(doc map[string]any) {
 	for key, value := range doc {
 		child, ok := value.(map[string]any)
@@ -230,15 +218,8 @@ func pruneZeroObjects(doc map[string]any) {
 	}
 }
 
-// isZeroManifestObject reports whether obj is empty, or is a
-// features.bot_user carrying only an empty display_name, or a
-// settings.interactivity carrying only is_enabled=false. Slack treats an
-// absent key and its zero form the same, except for event_subscriptions,
-// where {} is rejected whenever Socket Mode is disabled. This is pure
-// key-name matching, so it must only be applied to an object reached by
-// walking a managed path (pruneManagedAncestors) or a document built
-// entirely from a schema plan (pruneZeroObjects), never to an exported
-// document generically.
+// isZeroManifestObject matches on the key name alone, so it must only see
+// objects on schema-managed paths.
 func isZeroManifestObject(key string, obj map[string]any) bool {
 	switch len(obj) {
 	case 0:

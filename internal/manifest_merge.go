@@ -9,12 +9,9 @@ import (
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
 
-// manifestGroups lists the top-level manifest keys the resource schema
-// models. managedManifestPaths only walks attributes nested under these
-// groups, so adding a schema attribute that models a new top-level manifest
-// key requires adding it here too, and a future non-manifest top-level
-// attribute (for example a timeouts block) never leaks into the payload
-// just because it happens not to be computed-only.
+// manifestGroups are the top-level manifest keys the schema models. A new
+// top-level group must be added here; any other top-level attribute (a
+// timeouts block, say) is not a manifest field and stays out of the payload.
 var manifestGroups = map[string]struct{}{
 	"display_information": {},
 	"features":            {},
@@ -22,13 +19,11 @@ var manifestGroups = map[string]struct{}{
 	"settings":            {},
 }
 
-// managedManifestPaths lists the manifest key paths the resource schema
-// manages, derived from the schema so that adding an attribute automatically
-// makes its manifest field managed. Attribute names match manifest keys.
-// Only attributes nested under manifestGroups are considered; computed-only
-// attributes (id, credentials) are not manifest fields; single nested
-// attributes are walked into; every other attribute, including list nested
-// attributes, is a leaf that is replaced as a whole.
+// managedManifestPaths derives the manifest key paths the schema manages,
+// so adding an attribute makes its manifest field managed. Attribute names
+// match manifest keys; computed-only attributes (id, credentials) are
+// skipped; single nested attributes are walked into; everything else,
+// including list nested attributes, is a leaf replaced as a whole.
 func managedManifestPaths(attrs map[string]schema.Attribute) [][]string {
 	var paths [][]string
 	var walk func(attrs map[string]schema.Attribute, prefix []string)
@@ -58,22 +53,12 @@ func managedManifestPaths(attrs map[string]schema.Attribute) [][]string {
 }
 
 // mergeManifest overlays the managed paths of planned onto a copy of
-// current: a managed path present in planned takes the planned value, a
-// managed path absent from planned is removed, and every subtree of current
-// outside the managed paths is copied into the result byte-for-byte,
+// current: a managed path present in planned takes the planned value, one
+// absent from planned is removed, and everything else in current is left
 // untouched. This is what lets apps.manifest.update, which replaces the
 // whole manifest, be called without dropping the fields this provider does
-// not model.
-//
-// Cleanup of objects the merge left empty only ever walks the ancestor
-// chain of a managed path (see pruneManagedAncestors): an object made empty
-// by the merge is removed (Slack treats an absent object and an empty one
-// the same, and rejects some empty ones, see UpdateAppManifest), and a
-// features.bot_user or settings.interactivity left in its zero form (see
-// isZeroManifestObject) is removed the same way. A key that is not on any
-// managed path is never visited, so an unmanaged object that happens to be
-// empty, or named "bot_user" / "interactivity" at some unrelated depth,
-// survives untouched.
+// not model. Objects the merge left empty or in their zero form are dropped
+// along the managed paths only, so unmanaged subtrees are never visited.
 func mergeManifest(current, planned appmanifest.Document, managed [][]string) appmanifest.Document {
 	merged := cloneObject(current)
 	for _, path := range managed {
@@ -151,10 +136,8 @@ func deletePath(obj map[string]any, path []string) {
 	delete(obj, path[len(path)-1])
 }
 
-// pruneManagedAncestors walks path's ancestor objects in obj as far as they
-// exist and, on the way back up, drops one the merge left empty or in its
-// zero form (isZeroManifestObject). It only ever looks at keys that are on
-// path, so it can never reach into a subtree the merge did not touch.
+// pruneManagedAncestors walks path as far as it exists and, on the way back
+// up, drops an object the merge left empty or in its zero form.
 func pruneManagedAncestors(obj map[string]any, path []string) {
 	if len(path) <= 1 {
 		return

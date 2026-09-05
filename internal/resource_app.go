@@ -16,9 +16,8 @@ import (
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
 
-// managedManifestPathsOnce computes managedManifestPaths from the resource
-// schema exactly once: the schema is static, so every Update call can share
-// the same derived paths instead of rebuilding the schema per call.
+// managedManifestPathsOnce derives the managed paths from the static schema
+// once, instead of rebuilding the schema on every Update.
 var managedManifestPathsOnce = sync.OnceValue(func() [][]string {
 	var res resource.SchemaResponse
 	(&ResourceApp{}).Schema(context.Background(), resource.SchemaRequest{}, &res)
@@ -448,10 +447,8 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 		res.Diagnostics.AddError("failed to encode app manifest", err.Error())
 		return
 	}
-	// planned is built entirely from the plan, so pruning it generically is
-	// safe (see pruneZeroObjects); current, exported straight from Slack,
-	// must not be, which is why mergeManifest cleans up only along the
-	// ancestor chains of the paths it manages.
+	// planned comes from the plan, so it is safe to prune as a whole; current
+	// comes from Slack and is only cleaned up along the managed paths.
 	pruneZeroObjects(planned)
 
 	merged := mergeManifest(current, planned, managedManifestPathsOnce())
