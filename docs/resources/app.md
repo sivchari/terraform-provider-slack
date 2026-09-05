@@ -68,6 +68,7 @@ Optional:
 Optional:
 
 - `app_home` (Attributes) (see [below for nested schema](#nestedatt--features--app_home))
+- `assistant_view` (Attributes) (see [below for nested schema](#nestedatt--features--assistant_view))
 - `bot_user` (Attributes) (see [below for nested schema](#nestedatt--features--bot_user))
 - `shortcuts` (Attributes List) (see [below for nested schema](#nestedatt--features--shortcuts))
 - `slash_commands` (Attributes List) (see [below for nested schema](#nestedatt--features--slash_commands))
@@ -81,6 +82,37 @@ Optional:
 - `home_tab_enabled` (Boolean)
 - `messages_tab_enabled` (Boolean)
 - `messages_tab_read_only_enabled` (Boolean)
+
+
+<a id="nestedatt--features--assistant_view"></a>
+### Nested Schema for `features.assistant_view`
+
+Required:
+
+- `assistant_description` (String)
+
+Optional:
+
+- `actions` (Attributes List) (see [below for nested schema](#nestedatt--features--assistant_view--actions))
+- `suggested_prompts` (Attributes List) (see [below for nested schema](#nestedatt--features--assistant_view--suggested_prompts))
+
+<a id="nestedatt--features--assistant_view--actions"></a>
+### Nested Schema for `features.assistant_view.actions`
+
+Required:
+
+- `description` (String)
+- `name` (String)
+
+
+<a id="nestedatt--features--assistant_view--suggested_prompts"></a>
+### Nested Schema for `features.assistant_view.suggested_prompts`
+
+Required:
+
+- `message` (String)
+- `title` (String)
+
 
 
 <a id="nestedatt--features--bot_user"></a>

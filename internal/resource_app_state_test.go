@@ -6,12 +6,14 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
+
+	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
 
 func TestStateFromManifest_ZeroValuesBecomeNullWithoutPrior(t *testing.T) {
 	t.Parallel()
 
-	manifest := &slack.Manifest{
+	manifest := &appmanifest.Manifest{Manifest: slack.Manifest{
 		Display: slack.Display{Name: "test"},
 		Settings: slack.Settings{
 			SocketModeEnabled: true,
@@ -20,7 +22,7 @@ func TestStateFromManifest_ZeroValuesBecomeNullWithoutPrior(t *testing.T) {
 			},
 			Interactivity: slack.Interactivity{IsEnabled: true},
 		},
-	}
+	}}
 
 	state, diags := stateFromManifest(context.Background(), manifest, ResourceAppState{ID: types.StringValue("A1")})
 	if diags.HasError() {
@@ -57,12 +59,12 @@ func TestStateFromManifest_ZeroValuesBecomeNullWithoutPrior(t *testing.T) {
 func TestStateFromManifest_PriorExplicitZeroValuesAreKept(t *testing.T) {
 	t.Parallel()
 
-	manifest := &slack.Manifest{
+	manifest := &appmanifest.Manifest{Manifest: slack.Manifest{
 		Display: slack.Display{Name: "test"},
 		Settings: slack.Settings{
 			Interactivity: slack.Interactivity{IsEnabled: true},
 		},
-	}
+	}}
 	prior := ResourceAppState{
 		ID: types.StringValue("A1"),
 		Settings: &AppSettings{
@@ -91,11 +93,11 @@ func TestStateFromManifest_PriorExplicitZeroValuesAreKept(t *testing.T) {
 func TestStateFromManifest_RemoteDriftOverridesPrior(t *testing.T) {
 	t.Parallel()
 
-	manifest := &slack.Manifest{
-		Display: slack.Display{Name: "renamed"},
-		Features: slack.Features{
+	manifest := &appmanifest.Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "renamed"}},
+		Features: appmanifest.Features{Features: slack.Features{
 			BotUser: slack.BotUser{DisplayName: "bot", AlwaysOnline: true},
-		},
+		}},
 	}
 	prior := ResourceAppState{
 		ID: types.StringValue("A1"),
@@ -129,9 +131,9 @@ func TestStateFromManifest_RemoteDriftOverridesPrior(t *testing.T) {
 func TestStateFromManifest_PriorBlockKeptWhenRemoteZero(t *testing.T) {
 	t.Parallel()
 
-	manifest := &slack.Manifest{
+	manifest := &appmanifest.Manifest{Manifest: slack.Manifest{
 		Display: slack.Display{Name: "test"},
-	}
+	}}
 	prior := ResourceAppState{
 		ID: types.StringValue("A1"),
 		Settings: &AppSettings{
@@ -151,5 +153,132 @@ func TestStateFromManifest_PriorBlockKeptWhenRemoteZero(t *testing.T) {
 	}
 	if state.Settings.SocketModeEnabled.IsNull() || state.Settings.SocketModeEnabled.ValueBool() {
 		t.Errorf("SocketModeEnabled = %v, want explicit false", state.Settings.SocketModeEnabled)
+	}
+}
+
+func TestStateFromManifest_AssistantView(t *testing.T) {
+	t.Parallel()
+
+	manifest := &appmanifest.Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
+		Features: appmanifest.Features{
+			AssistantView: &appmanifest.AssistantView{
+				AssistantDescription: "Ask me anything",
+				SuggestedPrompts: []appmanifest.SuggestedPrompt{
+					{Title: "Summarize", Message: "Summarize this thread"},
+				},
+			},
+		},
+	}
+
+	state, diags := stateFromManifest(context.Background(), manifest, ResourceAppState{ID: types.StringValue("A1")})
+	if diags.HasError() {
+		t.Errorf("stateFromManifest() diagnostics: %v", diags)
+		return
+	}
+
+	if state.Features == nil || state.Features.AssistantView == nil {
+		t.Errorf("Features = %+v, want assistant_view set", state.Features)
+		return
+	}
+	view := state.Features.AssistantView
+	if got := view.AssistantDescription.ValueString(); got != "Ask me anything" {
+		t.Errorf("AssistantDescription = %q, want %q", got, "Ask me anything")
+	}
+	if len(view.SuggestedPrompts) != 1 || view.SuggestedPrompts[0].Message.ValueString() != "Summarize this thread" {
+		t.Errorf("SuggestedPrompts = %+v, want the exported prompt", view.SuggestedPrompts)
+	}
+	if view.Actions != nil {
+		t.Errorf("Actions = %+v, want nil", view.Actions)
+	}
+}
+
+func TestStateFromManifest_AssistantViewRemovedRemotely(t *testing.T) {
+	t.Parallel()
+
+	manifest := &appmanifest.Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
+	}
+	prior := ResourceAppState{
+		ID: types.StringValue("A1"),
+		Features: &AppFeatures{
+			AssistantView: &AppAssistantView{
+				AssistantDescription: types.StringValue("Ask me anything"),
+			},
+		},
+	}
+
+	state, diags := stateFromManifest(context.Background(), manifest, prior)
+	if diags.HasError() {
+		t.Errorf("stateFromManifest() diagnostics: %v", diags)
+		return
+	}
+
+	if state.Features == nil {
+		t.Error("Features = nil, want the prior block kept")
+		return
+	}
+	if state.Features.AssistantView != nil {
+		t.Errorf("AssistantView = %+v, want nil", state.Features.AssistantView)
+	}
+}
+
+func TestManifestFromState_AssistantView(t *testing.T) {
+	t.Parallel()
+
+	state := ResourceAppState{
+		DisplayInformation: &AppDisplayInformation{Name: types.StringValue("test")},
+		Features: &AppFeatures{
+			AssistantView: &AppAssistantView{
+				AssistantDescription: types.StringValue("Ask me anything"),
+				SuggestedPrompts: []AppSuggestedPrompt{
+					{Title: types.StringValue("Summarize"), Message: types.StringValue("Summarize this thread")},
+				},
+				Actions: []AppAssistantAction{
+					{Name: types.StringValue("summarize"), Description: types.StringValue("Summarize the selected message")},
+				},
+			},
+		},
+	}
+
+	manifest, diags := manifestFromState(context.Background(), state)
+	if diags.HasError() {
+		t.Errorf("manifestFromState() diagnostics: %v", diags)
+		return
+	}
+
+	view := manifest.Features.AssistantView
+	if view == nil {
+		t.Error("Features.AssistantView = nil, want it set")
+		return
+	}
+	if view.AssistantDescription != "Ask me anything" {
+		t.Errorf("AssistantDescription = %q", view.AssistantDescription)
+	}
+	if len(view.SuggestedPrompts) != 1 || view.SuggestedPrompts[0].Title != "Summarize" {
+		t.Errorf("SuggestedPrompts = %+v", view.SuggestedPrompts)
+	}
+	if len(view.Actions) != 1 || view.Actions[0].Name != "summarize" {
+		t.Errorf("Actions = %+v", view.Actions)
+	}
+}
+
+func TestManifestFromState_NoAssistantView(t *testing.T) {
+	t.Parallel()
+
+	state := ResourceAppState{
+		DisplayInformation: &AppDisplayInformation{Name: types.StringValue("test")},
+		Features: &AppFeatures{
+			BotUser: &AppBotUser{DisplayName: types.StringValue("bot")},
+		},
+	}
+
+	manifest, diags := manifestFromState(context.Background(), state)
+	if diags.HasError() {
+		t.Errorf("manifestFromState() diagnostics: %v", diags)
+		return
+	}
+	if manifest.Features.AssistantView != nil {
+		t.Errorf("Features.AssistantView = %+v, want nil", manifest.Features.AssistantView)
 	}
 }

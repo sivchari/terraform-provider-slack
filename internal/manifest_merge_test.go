@@ -28,6 +28,9 @@ func TestManagedManifestPaths(t *testing.T) {
 		"display_information.name",
 		"display_information.description",
 		"features.bot_user.always_online",
+		"features.assistant_view.assistant_description",
+		"features.assistant_view.suggested_prompts",
+		"features.assistant_view.actions",
 		"features.slash_commands",
 		"oauth_config.scopes.bot",
 		"settings.interactivity.is_enabled",
@@ -42,6 +45,7 @@ func TestManagedManifestPaths(t *testing.T) {
 		"client_secret",
 		"features",
 		"features.slash_commands.command",
+		"features.assistant_view.suggested_prompts.title",
 	} {
 		if slices.Contains(got, unwanted) {
 			t.Errorf("managedManifestPaths() = %v, want it not to contain %q", got, unwanted)

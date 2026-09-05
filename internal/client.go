@@ -56,7 +56,7 @@ type createAppManifestHTTPResponse struct {
 // CreateAppManifest creates an app from an app manifest via a raw HTTP call
 // to apps.manifest.create, since slack.Client.CreateManifestContext discards
 // app_id, credentials and oauth_authorize_url.
-func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error) {
+func (c *Client) CreateAppManifest(ctx context.Context, manifest *appmanifest.Manifest, token string) (*appmanifest.CreateResponse, error) {
 	if token == "" {
 		token = c.configToken
 	}
@@ -184,7 +184,7 @@ func (c *Client) postManifestMethod(ctx context.Context, method string, values u
 }
 
 // marshalManifest encodes a typed manifest through marshalDocument.
-func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
+func marshalManifest(manifest *appmanifest.Manifest) ([]byte, error) {
 	doc, err := appmanifest.NewDocument(manifest)
 	if err != nil {
 		return nil, err

@@ -42,8 +42,8 @@ func TestClientCreateAppManifest(t *testing.T) {
 	client := NewClient("bot-token", "")
 	client.apiURL = server.URL + "/"
 
-	resp, err := client.CreateAppManifest(context.Background(), &slack.Manifest{
-		Display: slack.Display{Name: "test"},
+	resp, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
 	}, "config-token")
 	if err != nil {
 		t.Errorf("CreateAppManifest() error = %v", err)
@@ -77,7 +77,7 @@ func TestClientCreateAppManifest_Error(t *testing.T) {
 	client := NewClient("bot-token", "config-token")
 	client.apiURL = server.URL + "/"
 
-	_, err := client.CreateAppManifest(context.Background(), &slack.Manifest{}, "")
+	_, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{}, "")
 	if err == nil {
 		t.Error("CreateAppManifest() error = nil, want an error")
 		return
@@ -175,20 +175,20 @@ func TestMarshalManifest(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		manifest *slack.Manifest
+		manifest *appmanifest.Manifest
 		want     string
 	}{
 		{
 			name: "empty value structs are omitted",
-			manifest: &slack.Manifest{
+			manifest: &appmanifest.Manifest{Manifest: slack.Manifest{
 				Display:  slack.Display{Name: "test"},
 				Settings: slack.Settings{SocketModeEnabled: false},
-			},
+			}},
 			want: `{"display_information":{"name":"test"}}`,
 		},
 		{
 			name: "disabled-only interactivity is omitted",
-			manifest: &slack.Manifest{
+			manifest: &appmanifest.Manifest{Manifest: slack.Manifest{
 				Display: slack.Display{Name: "test"},
 				Settings: slack.Settings{
 					Interactivity: slack.Interactivity{IsEnabled: false},
@@ -196,20 +196,22 @@ func TestMarshalManifest(t *testing.T) {
 						RequestUrl: "https://example.com/events",
 					},
 				},
-			},
+			}},
 			want: `{"display_information":{"name":"test"},"settings":{"event_subscriptions":{"request_url":"https://example.com/events"}}}`,
 		},
 		{
 			name: "configured blocks are kept",
-			manifest: &slack.Manifest{
-				Display: slack.Display{Name: "test"},
-				Features: slack.Features{
+			manifest: &appmanifest.Manifest{
+				Manifest: slack.Manifest{
+					Display: slack.Display{Name: "test"},
+					Settings: slack.Settings{
+						Interactivity:     slack.Interactivity{IsEnabled: true, RequestUrl: "https://example.com/i"},
+						SocketModeEnabled: true,
+					},
+				},
+				Features: appmanifest.Features{Features: slack.Features{
 					BotUser: slack.BotUser{DisplayName: "bot"},
-				},
-				Settings: slack.Settings{
-					Interactivity:     slack.Interactivity{IsEnabled: true, RequestUrl: "https://example.com/i"},
-					SocketModeEnabled: true,
-				},
+				}},
 			},
 			want: `{"display_information":{"name":"test"},"features":{"bot_user":{"display_name":"bot"}},` +
 				`"settings":{"interactivity":{"is_enabled":true,"request_url":"https://example.com/i"},"socket_mode_enabled":true}}`,

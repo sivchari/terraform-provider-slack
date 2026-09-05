@@ -261,6 +261,91 @@ func TestAccAppResourceUpdatePreservesUnmanagedFields(t *testing.T) {
 	})
 }
 
+func TestAccAppResourceAssistantView(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	var remote appmanifest.Document
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").DoAndReturn(
+		func(_ context.Context, manifest *appmanifest.Manifest, _ string) (*appmanifest.CreateResponse, error) {
+			doc, err := appmanifest.NewDocument(manifest)
+			if err != nil {
+				return nil, err
+			}
+			remote = doc
+			return &appmanifest.CreateResponse{AppID: "A012345678"}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (appmanifest.Document, error) {
+			return remote, nil
+		},
+	).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest appmanifest.Document, _, _ string) (*slack.UpdateManifestResponse, error) {
+			remote = manifest
+			return &slack.UpdateManifestResponse{}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResourceAssistantView(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "features.assistant_view.assistant_description", "Ask me anything"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.assistant_view.suggested_prompts.0.title", "Summarize"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.assistant_view.suggested_prompts.0.message", "Summarize this thread"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.assistant_view.actions.0.name", "summarize"),
+				),
+			},
+			{
+				// Dropping the block must remove assistant_view from the manifest.
+				Config: testAccAppResource(),
+				Check: func(*terraform.State) error {
+					features, _ := remote["features"].(map[string]any)
+					if _, ok := features["assistant_view"]; ok {
+						return fmt.Errorf("remote manifest %v still has features.assistant_view", remote)
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+func testAccAppResourceAssistantView() string {
+	return providerConfig + `
+resource "slack_app" "test" {
+	display_information = {
+		name = "test"
+	}
+	features = {
+		bot_user = {
+			display_name = "test-bot"
+		}
+		assistant_view = {
+			assistant_description = "Ask me anything"
+			suggested_prompts = [
+				{ title = "Summarize", message = "Summarize this thread" },
+			]
+			actions = [
+				{ name = "summarize", description = "Summarize the selected message" },
+			]
+		}
+	}
+	oauth_config = {
+		scopes = {
+			bot = ["chat:write"]
+		}
+	}
+}`
+}
+
 func testAccAppManifest(name string) appmanifest.Document {
 	return appmanifest.Document{
 		"display_information": map[string]any{"name": name},

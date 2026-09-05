@@ -38,7 +38,7 @@ type APIClient interface {
 	ArchiveConversationContext(ctx context.Context, channelID string) error
 	CloseConversationContext(ctx context.Context, channelID string) (noOp bool, alreadyClosed bool, err error)
 	// App Manifests
-	CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error)
+	CreateAppManifest(ctx context.Context, manifest *appmanifest.Manifest, token string) (*appmanifest.CreateResponse, error)
 	UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error)
 	ExportAppManifest(ctx context.Context, token, appID string) (appmanifest.Document, error)
 	DeleteManifestContext(ctx context.Context, token, appID string) (*slack.SlackResponse, error)

@@ -47,10 +47,27 @@ type AppDisplayInformation struct {
 
 type AppFeatures struct {
 	AppHome       *AppHome          `tfsdk:"app_home"`
+	AssistantView *AppAssistantView `tfsdk:"assistant_view"`
 	BotUser       *AppBotUser       `tfsdk:"bot_user"`
 	Shortcuts     []AppShortcut     `tfsdk:"shortcuts"`
 	SlashCommands []AppSlashCommand `tfsdk:"slash_commands"`
 	WorkflowSteps []AppWorkflowStep `tfsdk:"workflow_steps"`
+}
+
+type AppAssistantView struct {
+	AssistantDescription types.String         `tfsdk:"assistant_description"`
+	SuggestedPrompts     []AppSuggestedPrompt `tfsdk:"suggested_prompts"`
+	Actions              []AppAssistantAction `tfsdk:"actions"`
+}
+
+type AppSuggestedPrompt struct {
+	Title   types.String `tfsdk:"title"`
+	Message types.String `tfsdk:"message"`
+}
+
+type AppAssistantAction struct {
+	Name        types.String `tfsdk:"name"`
+	Description types.String `tfsdk:"description"`
 }
 
 type AppHome struct {
@@ -188,6 +205,40 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 							},
 							"messages_tab_read_only_enabled": schema.BoolAttribute{
 								Optional: true,
+							},
+						},
+					},
+					"assistant_view": schema.SingleNestedAttribute{
+						Optional: true,
+						Attributes: map[string]schema.Attribute{
+							"assistant_description": schema.StringAttribute{
+								Required: true,
+							},
+							"suggested_prompts": schema.ListNestedAttribute{
+								Optional: true,
+								NestedObject: schema.NestedAttributeObject{
+									Attributes: map[string]schema.Attribute{
+										"title": schema.StringAttribute{
+											Required: true,
+										},
+										"message": schema.StringAttribute{
+											Required: true,
+										},
+									},
+								},
+							},
+							"actions": schema.ListNestedAttribute{
+								Optional: true,
+								NestedObject: schema.NestedAttributeObject{
+									Attributes: map[string]schema.Attribute{
+										"name": schema.StringAttribute{
+											Required: true,
+										},
+										"description": schema.StringAttribute{
+											Required: true,
+										},
+									},
+								},
 							},
 						},
 					},
@@ -485,23 +536,28 @@ func (r *ResourceApp) ImportState(ctx context.Context, req resource.ImportStateR
 	res.Diagnostics.Append(diags...)
 }
 
-func manifestFromState(ctx context.Context, state ResourceAppState) (*slack.Manifest, diag.Diagnostics) {
+func manifestFromState(ctx context.Context, state ResourceAppState) (*appmanifest.Manifest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	manifest := &slack.Manifest{
-		Display: slack.Display{
-			Name:            state.DisplayInformation.Name.ValueString(),
-			Description:     state.DisplayInformation.Description.ValueString(),
-			LongDescription: state.DisplayInformation.LongDescription.ValueString(),
-			BackgroundColor: state.DisplayInformation.BackgroundColor.ValueString(),
+	manifest := &appmanifest.Manifest{
+		Manifest: slack.Manifest{
+			Display: slack.Display{
+				Name:            state.DisplayInformation.Name.ValueString(),
+				Description:     state.DisplayInformation.Description.ValueString(),
+				LongDescription: state.DisplayInformation.LongDescription.ValueString(),
+				BackgroundColor: state.DisplayInformation.BackgroundColor.ValueString(),
+			},
 		},
 	}
 
 	if state.Features != nil {
-		manifest.Features = slack.Features{
-			Shortcuts:     shortcutsFromState(state.Features.Shortcuts),
-			SlashCommands: slashCommandsFromState(state.Features.SlashCommands),
-			WorkflowSteps: workflowStepsFromState(state.Features.WorkflowSteps),
+		manifest.Features = appmanifest.Features{
+			Features: slack.Features{
+				Shortcuts:     shortcutsFromState(state.Features.Shortcuts),
+				SlashCommands: slashCommandsFromState(state.Features.SlashCommands),
+				WorkflowSteps: workflowStepsFromState(state.Features.WorkflowSteps),
+			},
+			AssistantView: assistantViewFromState(state.Features.AssistantView),
 		}
 		if state.Features.AppHome != nil {
 			manifest.Features.AppHome = slack.AppHome{
@@ -569,7 +625,7 @@ func manifestFromState(ctx context.Context, state ResourceAppState) (*slack.Mani
 // was null or absent, and keep the prior's explicit zero form ("" / false)
 // otherwise. Without this, a config that omits an optional attribute would
 // show a permanent diff against the refreshed state.
-func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing ResourceAppState) (ResourceAppState, diag.Diagnostics) {
+func stateFromManifest(ctx context.Context, manifest *appmanifest.Manifest, existing ResourceAppState) (ResourceAppState, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	state := existing
@@ -591,6 +647,7 @@ func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing R
 		pf = &AppFeatures{}
 	}
 	features := &AppFeatures{
+		AssistantView: assistantViewToState(manifest.Features.AssistantView, pf.AssistantView),
 		Shortcuts:     shortcutsToState(manifest.Features.Shortcuts, pf.Shortcuts),
 		SlashCommands: slashCommandsToState(manifest.Features.SlashCommands, pf.SlashCommands),
 		WorkflowSteps: workflowStepsToState(manifest.Features.WorkflowSteps, pf.WorkflowSteps),
@@ -616,7 +673,7 @@ func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing R
 			AlwaysOnline: normBool(manifest.Features.BotUser.AlwaysOnline, priorBotUser.AlwaysOnline),
 		}
 	}
-	if priorFeatures == nil && features.AppHome == nil && features.BotUser == nil &&
+	if priorFeatures == nil && features.AppHome == nil && features.AssistantView == nil && features.BotUser == nil &&
 		features.Shortcuts == nil && features.SlashCommands == nil && features.WorkflowSteps == nil {
 		state.Features = nil
 	} else {
@@ -752,6 +809,67 @@ func isZeroEventSubscriptions(e slack.EventSubscriptions) bool {
 
 func isZeroInteractivity(i slack.Interactivity) bool {
 	return !i.IsEnabled && i.RequestUrl == "" && i.MessageMenuOptionsUrl == ""
+}
+
+func assistantViewFromState(view *AppAssistantView) *appmanifest.AssistantView {
+	if view == nil {
+		return nil
+	}
+	out := &appmanifest.AssistantView{
+		AssistantDescription: view.AssistantDescription.ValueString(),
+	}
+	for _, p := range view.SuggestedPrompts {
+		out.SuggestedPrompts = append(out.SuggestedPrompts, appmanifest.SuggestedPrompt{
+			Title:   p.Title.ValueString(),
+			Message: p.Message.ValueString(),
+		})
+	}
+	for _, a := range view.Actions {
+		out.Actions = append(out.Actions, appmanifest.AssistantAction{
+			Name:        a.Name.ValueString(),
+			Description: a.Description.ValueString(),
+		})
+	}
+	return out
+}
+
+// assistantViewToState maps the exported assistant_view onto state. Unlike
+// the slack-go value structs, the group is a pointer that is only set when
+// Slack returned it, so an absent group means Agents & AI Apps is off and
+// the block becomes null regardless of the prior state.
+func assistantViewToState(view *appmanifest.AssistantView, prior *AppAssistantView) *AppAssistantView {
+	if view == nil {
+		return nil
+	}
+	if prior == nil {
+		prior = &AppAssistantView{}
+	}
+	out := &AppAssistantView{
+		AssistantDescription: types.StringValue(view.AssistantDescription),
+	}
+	if len(view.SuggestedPrompts) > 0 {
+		out.SuggestedPrompts = make([]AppSuggestedPrompt, 0, len(view.SuggestedPrompts))
+		for _, p := range view.SuggestedPrompts {
+			out.SuggestedPrompts = append(out.SuggestedPrompts, AppSuggestedPrompt{
+				Title:   types.StringValue(p.Title),
+				Message: types.StringValue(p.Message),
+			})
+		}
+	} else if prior.SuggestedPrompts != nil && len(prior.SuggestedPrompts) == 0 {
+		out.SuggestedPrompts = prior.SuggestedPrompts
+	}
+	if len(view.Actions) > 0 {
+		out.Actions = make([]AppAssistantAction, 0, len(view.Actions))
+		for _, a := range view.Actions {
+			out.Actions = append(out.Actions, AppAssistantAction{
+				Name:        types.StringValue(a.Name),
+				Description: types.StringValue(a.Description),
+			})
+		}
+	} else if prior.Actions != nil && len(prior.Actions) == 0 {
+		out.Actions = prior.Actions
+	}
+	return out
 }
 
 func shortcutsFromState(shortcuts []AppShortcut) []slack.Shortcut {
