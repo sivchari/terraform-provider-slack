@@ -2,12 +2,16 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
+
+	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
 
 func TestClientCreateAppManifest(t *testing.T) {
@@ -85,7 +89,7 @@ func TestClientCreateAppManifest_Error(t *testing.T) {
 	}
 }
 
-func TestClientUpdateManifestContext(t *testing.T) {
+func TestClientUpdateAppManifest(t *testing.T) {
 	t.Parallel()
 
 	var gotManifest string
@@ -109,25 +113,45 @@ func TestClientUpdateManifestContext(t *testing.T) {
 	client := NewClient("bot-token", "config-token")
 	client.apiURL = server.URL + "/"
 
-	resp, err := client.UpdateManifestContext(context.Background(), &slack.Manifest{
-		Display:  slack.Display{Name: "test"},
-		Settings: slack.Settings{SocketModeEnabled: false},
-	}, "", "A012345678")
+	manifest := appmanifest.Document{
+		"display_information": map[string]any{"name": "test"},
+		"features": map[string]any{
+			"unfurl_domains": []any{"example.com"},
+			"bot_user":       map[string]any{"display_name": ""},
+		},
+		"settings": map[string]any{
+			"event_subscriptions": map[string]any{},
+			"interactivity":       map[string]any{"is_enabled": false},
+		},
+		// an unmanaged nested empty object, as a platform app's export has;
+		// the document must be sent exactly as given
+		"functions": map[string]any{
+			"f": map[string]any{
+				"output_parameters": map[string]any{"properties": map[string]any{}},
+			},
+		},
+	}
+
+	resp, err := client.UpdateAppManifest(context.Background(), manifest, "", "A012345678")
 	if err != nil {
-		t.Errorf("UpdateManifestContext() error = %v", err)
+		t.Errorf("UpdateAppManifest() error = %v", err)
 		return
 	}
 	if !resp.PermissionsUpdated {
 		t.Error("PermissionsUpdated = false, want true")
 	}
-	for _, key := range []string{"event_subscriptions", "interactivity", "bot_user"} {
-		if strings.Contains(gotManifest, key) {
-			t.Errorf("manifest %q contains empty %q object, want it omitted", gotManifest, key)
-		}
+
+	wantBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Errorf("json.Marshal(manifest) error = %v", err)
+		return
+	}
+	if gotManifest != string(wantBytes) {
+		t.Errorf("manifest = %s, want %s", gotManifest, wantBytes)
 	}
 }
 
-func TestClientUpdateManifestContext_Error(t *testing.T) {
+func TestClientUpdateAppManifest_Error(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,11 +170,11 @@ func TestClientUpdateManifestContext_Error(t *testing.T) {
 	client := NewClient("bot-token", "config-token")
 	client.apiURL = server.URL + "/"
 
-	_, err := client.UpdateManifestContext(context.Background(), &slack.Manifest{
-		Display: slack.Display{Name: "test"},
+	_, err := client.UpdateAppManifest(context.Background(), appmanifest.Document{
+		"display_information": map[string]any{"name": "test"},
 	}, "", "A012345678")
 	if err == nil {
-		t.Error("UpdateManifestContext() error = nil, want an error")
+		t.Error("UpdateAppManifest() error = nil, want an error")
 		return
 	}
 	want := "apps.manifest.update: invalid_manifest\n" +
@@ -220,5 +244,86 @@ func TestMarshalManifest(t *testing.T) {
 				t.Errorf("marshalManifest() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClientExportAppManifest(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("failed to parse form: %v", err)
+		}
+		if got := r.FormValue("app_id"); got != "A012345678" {
+			t.Errorf("app_id = %q, want %q", got, "A012345678")
+		}
+		if got := r.FormValue("token"); got != "config-token" {
+			t.Errorf("token = %q, want %q", got, "config-token")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"ok": true,
+			"manifest": {
+				"_metadata": {"major_version": 1, "minor_version": 1},
+				"display_information": {"name": "test"},
+				"features": {
+					"unfurl_domains": ["example.com"],
+					"bot_user": {"display_name": "bot", "always_online": false}
+				},
+				"settings": {"token_rotation_enabled": false}
+			}
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("bot-token", "config-token")
+	client.apiURL = server.URL + "/"
+
+	doc, err := client.ExportAppManifest(context.Background(), "", "A012345678")
+	if err != nil {
+		t.Errorf("ExportAppManifest() error = %v", err)
+		return
+	}
+
+	// Keys outside slack.Manifest must survive: they are what the
+	// read-merge-write update relies on.
+	metadata, _ := doc["_metadata"].(map[string]any)
+	if got := metadata["major_version"]; got != float64(1) {
+		t.Errorf("_metadata.major_version = %v, want 1", got)
+	}
+	features, _ := doc["features"].(map[string]any)
+	if _, ok := features["unfurl_domains"]; !ok {
+		t.Errorf("features = %v, want unfurl_domains kept", features)
+	}
+	settings, _ := doc["settings"].(map[string]any)
+	if got, ok := settings["token_rotation_enabled"]; !ok || got != false {
+		t.Errorf("settings = %v, want token_rotation_enabled kept", settings)
+	}
+}
+
+func TestClientExportAppManifest_NotFound(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok": false, "error": "app_not_found"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("bot-token", "config-token")
+	client.apiURL = server.URL + "/"
+
+	_, err := client.ExportAppManifest(context.Background(), "", "A012345678")
+	var apiErr *appmanifest.Error
+	if !errors.As(err, &apiErr) {
+		t.Errorf("ExportAppManifest() error = %v, want *appmanifest.Error", err)
+		return
+	}
+	if apiErr.Code != "app_not_found" {
+		t.Errorf("Code = %q, want %q", apiErr.Code, "app_not_found")
+	}
+	if got := err.Error(); got != "apps.manifest.export: app_not_found" {
+		t.Errorf("error = %q, want %q", got, "apps.manifest.export: app_not_found")
 	}
 }
