@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 	"github.com/slack-go/slack"
@@ -82,23 +80,59 @@ func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest
 	}
 
 	if !resp.Ok {
-		return nil, manifestAPIError("apps.manifest.create", resp.Error, resp.Errors)
+		return nil, &appmanifest.Error{Method: "apps.manifest.create", Code: resp.Error, Errors: resp.Errors}
 	}
 
 	return &resp.CreateResponse, nil
 }
 
-// UpdateManifestContext updates an app manifest via a raw HTTP call to
-// apps.manifest.update, shadowing the embedded slack.Client method: the
-// request body must omit empty manifest objects (see marshalManifest) and
-// Slack's validation errors have to reach the caller instead of being reduced
-// to a bare error code.
-func (c *Client) UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error) {
+type exportAppManifestHTTPResponse struct {
+	Manifest appmanifest.Document `json:"manifest"`
+	Ok       bool                 `json:"ok"`
+	Error    string               `json:"error"`
+}
+
+// ExportAppManifest exports an app manifest as a generic JSON document via
+// a raw HTTP call to apps.manifest.export. slack.Client.ExportManifestContext
+// decodes into slack.Manifest, which drops every field that struct does not
+// model; the document keeps them so an update can send them back.
+func (c *Client) ExportAppManifest(ctx context.Context, token, appID string) (appmanifest.Document, error) {
 	if token == "" {
 		token = c.configToken
 	}
 
-	body, err := marshalManifest(manifest)
+	raw, err := c.postManifestMethod(ctx, "apps.manifest.export", url.Values{
+		"token":  {token},
+		"app_id": {appID},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp exportAppManifestHTTPResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decode apps.manifest.export response: %w", err)
+	}
+
+	if !resp.Ok {
+		return nil, &appmanifest.Error{Method: "apps.manifest.export", Code: resp.Error}
+	}
+
+	return resp.Manifest, nil
+}
+
+// UpdateAppManifest replaces an app manifest via a raw HTTP call to
+// apps.manifest.update. The endpoint has PUT semantics, so the document is
+// expected to be the exported manifest with the managed fields overlaid (see
+// mergeManifest); the request body omits empty manifest objects (see
+// marshalDocument) and Slack's validation errors reach the caller instead of
+// being reduced to a bare error code.
+func (c *Client) UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error) {
+	if token == "" {
+		token = c.configToken
+	}
+
+	body, err := marshalDocument(manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +152,7 @@ func (c *Client) UpdateManifestContext(ctx context.Context, manifest *slack.Mani
 	}
 
 	if !resp.Ok {
-		return nil, manifestAPIError("apps.manifest.update", resp.Error, resp.Errors)
+		return nil, &appmanifest.Error{Method: "apps.manifest.update", Code: resp.Error, Errors: resp.Errors}
 	}
 
 	return &resp, nil
@@ -149,37 +183,36 @@ func (c *Client) postManifestMethod(ctx context.Context, method string, values u
 	return raw, nil
 }
 
-// manifestAPIError formats a manifest API failure with one pointer: message
-// line per validation error, so users can see which part of the manifest
-// Slack rejected instead of just an error code.
-func manifestAPIError(method, code string, errs []slack.ManifestValidationError) error {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %s", method, code)
-	for _, e := range errs {
-		fmt.Fprintf(&b, "\n%s: %s", e.Pointer, e.Message)
+// marshalManifest encodes a typed manifest through marshalDocument.
+func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
+	doc, err := appmanifest.NewDocument(manifest)
+	if err != nil {
+		return nil, err
 	}
-	return errors.New(b.String())
+	return marshalDocument(doc)
 }
 
-// marshalManifest encodes the manifest, dropping objects that encoding/json
-// cannot omit because slack.Manifest nests value structs: empty objects
-// (recursively), a bot_user carrying only an empty display_name, and an
-// interactivity carrying only is_enabled=false. Slack treats an absent key
-// and its zero form the same, except for event_subscriptions, where {} is
-// rejected whenever Socket Mode is disabled.
-func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
-	body, err := json.Marshal(manifest)
+// marshalDocument encodes the manifest document, dropping objects that
+// encoding/json cannot omit because slack.Manifest nests value structs:
+// empty objects (recursively), a bot_user carrying only an empty
+// display_name, and an interactivity carrying only is_enabled=false. Slack
+// treats an absent key and its zero form the same, except for
+// event_subscriptions, where {} is rejected whenever Socket Mode is disabled.
+func marshalDocument(doc appmanifest.Document) ([]byte, error) {
+	body, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	var doc map[string]any
-	if err := json.Unmarshal(body, &doc); err != nil {
+	// Reparse so pruning works on a private copy and on plain
+	// map[string]any values regardless of how the caller built the document.
+	var copied map[string]any
+	if err := json.Unmarshal(body, &copied); err != nil {
 		return nil, fmt.Errorf("reparse manifest: %w", err)
 	}
-	pruneZeroObjects(doc)
+	pruneZeroObjects(copied)
 
-	normalized, err := json.Marshal(doc)
+	normalized, err := json.Marshal(copied)
 	if err != nil {
 		return nil, fmt.Errorf("marshal normalized manifest: %w", err)
 	}

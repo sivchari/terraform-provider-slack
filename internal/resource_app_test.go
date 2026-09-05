@@ -32,7 +32,7 @@ func TestAccAppResource(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
-	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -67,7 +67,7 @@ func TestAccAppResourceWithoutBotToken(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
-	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -100,15 +100,15 @@ func TestAccAppResourceUpdate(t *testing.T) {
 
 	remote := testAccAppManifest("test")
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(createResp, nil).AnyTimes()
-	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").DoAndReturn(
-		func(context.Context, string, string) (*slack.Manifest, error) {
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (appmanifest.Document, error) {
 			return remote, nil
 		},
 	).AnyTimes()
 	// The expectation pins the app_id argument: an unknown plan ID would reach
 	// Slack as "" and fail the test here.
-	client.EXPECT().UpdateManifestContext(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
-		func(_ context.Context, manifest *slack.Manifest, _, _ string) (*slack.UpdateManifestResponse, error) {
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest appmanifest.Document, _, _ string) (*slack.UpdateManifestResponse, error) {
 			remote = manifest
 			return &slack.UpdateManifestResponse{}, nil
 		},
@@ -140,7 +140,7 @@ func TestAccAppResourceRemoteDrift(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
-	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(testAccAppManifest("drifted"), nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(testAccAppManifest("drifted"), nil).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -166,7 +166,8 @@ func TestAccAppResourceRemovedRemotely(t *testing.T) {
 	client := mock.NewMockAPIClient(ctrl)
 
 	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
-	client.EXPECT().ExportManifestContext(gomock.Any(), "", "A012345678").Return(nil, slack.SlackErrorResponse{Err: "app_not_found"}).AnyTimes()
+	notFound := &appmanifest.Error{Method: "apps.manifest.export", Code: "app_not_found"}
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(nil, notFound).AnyTimes()
 	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
 
 	resource.Test(t, resource.TestCase{
@@ -192,14 +193,82 @@ func TestAccAppResourceRemovedRemotely(t *testing.T) {
 	})
 }
 
-func testAccAppManifest(name string) *slack.Manifest {
-	return &slack.Manifest{
-		Display: slack.Display{Name: name},
-		Features: slack.Features{
-			BotUser: slack.BotUser{DisplayName: "test-bot"},
+// TestAccAppResourceUpdatePreservesUnmanagedFields covers the PUT semantics
+// of apps.manifest.update: fields outside the schema (Agents & AI Apps,
+// unfurl domains, token rotation, _metadata, ...) must be sent back as-is
+// or Slack removes them from the app.
+func TestAccAppResourceUpdatePreservesUnmanagedFields(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	remote := testAccAppManifest("test")
+	remote["_metadata"] = map[string]any{"major_version": float64(1), "minor_version": float64(1)}
+	remote["features"].(map[string]any)["unfurl_domains"] = []any{"example.com"}
+	remote["settings"] = map[string]any{"token_rotation_enabled": false}
+
+	var updated appmanifest.Document
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (appmanifest.Document, error) {
+			return remote, nil
 		},
-		OAuthConfig: slack.OAuthConfig{
-			Scopes: slack.OAuthScopes{Bot: []string{"chat:write"}},
+	).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest appmanifest.Document, _, _ string) (*slack.UpdateManifestResponse, error) {
+			updated = manifest
+			remote = manifest
+			return &slack.UpdateManifestResponse{}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config: testAccAppResourceRenamed(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "display_information.name", "test-renamed"),
+					func(*terraform.State) error {
+						if updated == nil {
+							return fmt.Errorf("apps.manifest.update was not called")
+						}
+						if got := updated["display_information"].(map[string]any)["name"]; got != "test-renamed" {
+							return fmt.Errorf("updated display_information.name = %v, want %q", got, "test-renamed")
+						}
+						if _, ok := updated["_metadata"]; !ok {
+							return fmt.Errorf("updated manifest %v lost _metadata", updated)
+						}
+						features, _ := updated["features"].(map[string]any)
+						if _, ok := features["unfurl_domains"]; !ok {
+							return fmt.Errorf("updated manifest %v lost features.unfurl_domains", updated)
+						}
+						settings, _ := updated["settings"].(map[string]any)
+						if _, ok := settings["token_rotation_enabled"]; !ok {
+							return fmt.Errorf("updated manifest %v lost settings.token_rotation_enabled", updated)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+func testAccAppManifest(name string) appmanifest.Document {
+	return appmanifest.Document{
+		"display_information": map[string]any{"name": name},
+		"features": map[string]any{
+			"bot_user": map[string]any{"display_name": "test-bot"},
+		},
+		"oauth_config": map[string]any{
+			"scopes": map[string]any{"bot": []any{"chat:write"}},
 		},
 	}
 }
