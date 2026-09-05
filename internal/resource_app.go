@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -11,7 +12,18 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
+
+	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
+
+// managedManifestPathsOnce computes managedManifestPaths from the resource
+// schema exactly once: the schema is static, so every Update call can share
+// the same derived paths instead of rebuilding the schema per call.
+var managedManifestPathsOnce = sync.OnceValue(func() [][]string {
+	var res resource.SchemaResponse
+	(&ResourceApp{}).Schema(context.Background(), resource.SchemaRequest{}, &res)
+	return managedManifestPaths(res.Schema.Attributes)
+})
 
 var (
 	_ resource.Resource                = &ResourceApp{}
@@ -356,13 +368,18 @@ func (r *ResourceApp) Read(ctx context.Context, req resource.ReadRequest, res *r
 		return
 	}
 
-	manifest, err := r.client.ExportManifestContext(ctx, "", state.ID.ValueString())
+	doc, err := r.client.ExportAppManifest(ctx, "", state.ID.ValueString())
 	if err != nil {
 		if isAppNotFound(err) {
 			res.State.RemoveResource(ctx)
 			return
 		}
 		res.Diagnostics.AddError("failed to export app manifest", err.Error())
+		return
+	}
+	manifest, err := doc.Manifest()
+	if err != nil {
+		res.Diagnostics.AddError("failed to decode app manifest", err.Error())
 		return
 	}
 
@@ -378,8 +395,8 @@ func (r *ResourceApp) Read(ctx context.Context, req resource.ReadRequest, res *r
 // isAppNotFound reports whether err is Slack's app_not_found, returned by
 // apps.manifest.export when the app does not exist or has been deleted.
 func isAppNotFound(err error) bool {
-	var slackErr slack.SlackErrorResponse
-	return errors.As(err, &slackErr) && slackErr.Err == "app_not_found"
+	var apiErr *appmanifest.Error
+	return errors.As(err, &apiErr) && apiErr.Code == "app_not_found"
 }
 
 func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
@@ -400,13 +417,46 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
+	// apps.manifest.update replaces the whole manifest, so the planned
+	// values are overlaid onto the exported manifest and only the fields the
+	// schema manages change; everything else (Agents & AI Apps, unfurl
+	// domains, token rotation, functions, ...) is sent back as exported.
+	current, err := r.client.ExportAppManifest(ctx, "", state.ID.ValueString())
+	if err != nil {
+		if isAppNotFound(err) {
+			res.Diagnostics.AddError(
+				"app not found",
+				fmt.Sprintf(
+					"Slack returned app_not_found for app %s while exporting its manifest before the update; "+
+						"the app may have been deleted outside Terraform. Run terraform plan again to recreate it.",
+					state.ID.ValueString(),
+				),
+			)
+			return
+		}
+		res.Diagnostics.AddError("failed to export app manifest", err.Error())
+		return
+	}
+
 	manifest, diags := manifestFromState(ctx, plan)
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
+	planned, err := appmanifest.NewDocument(manifest)
+	if err != nil {
+		res.Diagnostics.AddError("failed to encode app manifest", err.Error())
+		return
+	}
+	// planned is built entirely from the plan, so pruning it generically is
+	// safe (see pruneZeroObjects); current, exported straight from Slack,
+	// must not be, which is why mergeManifest cleans up only along the
+	// ancestor chains of the paths it manages.
+	pruneZeroObjects(planned)
 
-	if _, err := r.client.UpdateManifestContext(ctx, manifest, "", state.ID.ValueString()); err != nil {
+	merged := mergeManifest(current, planned, managedManifestPathsOnce())
+
+	if _, err := r.client.UpdateAppManifest(ctx, merged, "", state.ID.ValueString()); err != nil {
 		res.Diagnostics.AddError("failed to update app", err.Error())
 		return
 	}
@@ -431,9 +481,14 @@ func (r *ResourceApp) Delete(ctx context.Context, req resource.DeleteRequest, re
 }
 
 func (r *ResourceApp) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
-	manifest, err := r.client.ExportManifestContext(ctx, "", req.ID)
+	doc, err := r.client.ExportAppManifest(ctx, "", req.ID)
 	if err != nil {
 		res.Diagnostics.AddError("failed to export app manifest", err.Error())
+		return
+	}
+	manifest, err := doc.Manifest()
+	if err != nil {
+		res.Diagnostics.AddError("failed to decode app manifest", err.Error())
 		return
 	}
 
