@@ -247,6 +247,70 @@ func TestMarshalManifest(t *testing.T) {
 	}
 }
 
+func TestIsZeroManifestObject(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+		obj  map[string]any
+		want bool
+	}{
+		{
+			name: "empty object under any key",
+			key:  "app_home",
+			obj:  map[string]any{},
+			want: true,
+		},
+		{
+			name: "interactivity zero form",
+			key:  "interactivity",
+			obj:  map[string]any{"is_enabled": false},
+			want: true,
+		},
+		{
+			name: "interactivity enabled",
+			key:  "interactivity",
+			obj:  map[string]any{"is_enabled": true},
+			want: false,
+		},
+		{
+			name: "bot_user zero form",
+			key:  "bot_user",
+			obj:  map[string]any{"display_name": ""},
+			want: true,
+		},
+		{
+			name: "bot_user with a name",
+			key:  "bot_user",
+			obj:  map[string]any{"display_name": "bot"},
+			want: false,
+		},
+		{
+			name: "display_information zero form",
+			key:  "display_information",
+			obj:  map[string]any{"name": ""},
+			want: true,
+		},
+		{
+			name: "zero fields under an unrelated key",
+			key:  "event_subscriptions",
+			obj:  map[string]any{"is_enabled": false},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isZeroManifestObject(tt.key, tt.obj); got != tt.want {
+				t.Errorf("isZeroManifestObject(%q, %v) = %v, want %v", tt.key, tt.obj, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClientExportAppManifest(t *testing.T) {
 	t.Parallel()
 
