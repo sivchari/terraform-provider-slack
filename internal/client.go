@@ -224,29 +224,31 @@ func pruneZeroObjects(doc map[string]any) {
 // display_name, interactivity's is_enabled, ...), keyed by manifest key.
 // Deriving them from the type keeps pruning in sync when slack.Manifest
 // gains another such field.
-var zeroManifestForms = func() map[string]map[string]any {
+var zeroManifestForms = buildZeroManifestForms()
+
+func buildZeroManifestForms() map[string]map[string]any {
 	doc, err := appmanifest.NewDocument(&slack.Manifest{})
 	if err != nil {
 		panic(fmt.Sprintf("marshal zero manifest: %v", err))
 	}
 	forms := map[string]map[string]any{}
-	var walk func(obj map[string]any)
-	walk = func(obj map[string]any) {
-		for key, value := range obj {
-			child, ok := value.(map[string]any)
-			if !ok {
-				continue
-			}
-			walk(child)
-			if len(child) > 0 {
-				forms[key] = child
-			}
-			delete(obj, key)
-		}
-	}
-	walk(doc)
+	collectZeroForms(doc, forms)
 	return forms
-}()
+}
+
+func collectZeroForms(obj map[string]any, forms map[string]map[string]any) {
+	for key, value := range obj {
+		child, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		collectZeroForms(child, forms)
+		if len(child) > 0 {
+			forms[key] = child
+		}
+		delete(obj, key)
+	}
+}
 
 // isZeroManifestObject matches on the key name alone, so it must only see
 // objects on schema-managed paths.
