@@ -83,6 +83,29 @@ func TestManagedManifestPaths_RestrictsToManifestGroups(t *testing.T) {
 	}
 }
 
+func TestManifestGroups_MatchSchema(t *testing.T) {
+	t.Parallel()
+
+	var res resource.SchemaResponse
+	(&ResourceApp{}).Schema(context.Background(), resource.SchemaRequest{}, &res)
+
+	for name, attr := range res.Schema.Attributes {
+		configurable := attr.IsOptional() || attr.IsRequired()
+		_, isGroup := manifestGroups[name]
+		if configurable && !isGroup {
+			t.Errorf("top-level attribute %q is configurable but not in manifestGroups, so managedManifestPaths silently drops it", name)
+		}
+		if !configurable && isGroup {
+			t.Errorf("manifestGroups contains %q but the schema's %q is computed-only", name, name)
+		}
+	}
+	for name := range manifestGroups {
+		if _, ok := res.Schema.Attributes[name]; !ok {
+			t.Errorf("manifestGroups contains %q, which is not a top-level schema attribute", name)
+		}
+	}
+}
+
 func TestMergeManifest(t *testing.T) {
 	t.Parallel()
 

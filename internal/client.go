@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 	"github.com/slack-go/slack"
@@ -185,10 +186,10 @@ func (c *Client) postManifestMethod(ctx context.Context, method string, values u
 
 // marshalManifest encodes the manifest for apps.manifest.create, dropping
 // objects that encoding/json cannot omit because slack.Manifest nests value
-// structs: empty objects (recursively), a bot_user carrying only an empty
-// display_name, and an interactivity carrying only is_enabled=false. Slack
-// treats an absent key and its zero form the same, except for
-// event_subscriptions, where {} is rejected whenever Socket Mode is disabled.
+// structs: empty objects (recursively) and objects still carrying nothing
+// but non-omittable zero fields (see zeroManifestForms). Slack treats an
+// absent key and its zero form the same, except for event_subscriptions,
+// where {} is rejected whenever Socket Mode is disabled.
 func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
 	doc, err := appmanifest.NewDocument(manifest)
 	if err != nil {
@@ -218,21 +219,40 @@ func pruneZeroObjects(doc map[string]any) {
 	}
 }
 
+// zeroManifestForms are the objects a zero slack.Manifest still marshals
+// to because encoding/json cannot omit their fields (bot_user's
+// display_name, interactivity's is_enabled, ...), keyed by manifest key.
+// Deriving them from the type keeps pruning in sync when slack.Manifest
+// gains another such field.
+var zeroManifestForms = func() map[string]map[string]any {
+	doc, err := appmanifest.NewDocument(&slack.Manifest{})
+	if err != nil {
+		panic(fmt.Sprintf("marshal zero manifest: %v", err))
+	}
+	forms := map[string]map[string]any{}
+	var walk func(obj map[string]any)
+	walk = func(obj map[string]any) {
+		for key, value := range obj {
+			child, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			walk(child)
+			if len(child) > 0 {
+				forms[key] = child
+			}
+			delete(obj, key)
+		}
+	}
+	walk(doc)
+	return forms
+}()
+
 // isZeroManifestObject matches on the key name alone, so it must only see
 // objects on schema-managed paths.
 func isZeroManifestObject(key string, obj map[string]any) bool {
-	switch len(obj) {
-	case 0:
+	if len(obj) == 0 {
 		return true
-	case 1:
-		switch key {
-		case "interactivity":
-			enabled, ok := obj["is_enabled"].(bool)
-			return ok && !enabled
-		case "bot_user":
-			name, ok := obj["display_name"].(string)
-			return ok && name == ""
-		}
 	}
-	return false
+	return reflect.DeepEqual(obj, zeroManifestForms[key])
 }
