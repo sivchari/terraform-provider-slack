@@ -162,19 +162,19 @@ func (mr *MockAPIClientMockRecorder) EnableUserGroupContext(ctx, userGroup any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnableUserGroupContext", reflect.TypeOf((*MockAPIClient)(nil).EnableUserGroupContext), ctx, userGroup)
 }
 
-// ExportManifestContext mocks base method.
-func (m *MockAPIClient) ExportManifestContext(ctx context.Context, token, appID string) (*slack.Manifest, error) {
+// ExportAppManifest mocks base method.
+func (m *MockAPIClient) ExportAppManifest(ctx context.Context, token, appID string) (appmanifest.Document, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExportManifestContext", ctx, token, appID)
-	ret0, _ := ret[0].(*slack.Manifest)
+	ret := m.ctrl.Call(m, "ExportAppManifest", ctx, token, appID)
+	ret0, _ := ret[0].(appmanifest.Document)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ExportManifestContext indicates an expected call of ExportManifestContext.
-func (mr *MockAPIClientMockRecorder) ExportManifestContext(ctx, token, appID any) *gomock.Call {
+// ExportAppManifest indicates an expected call of ExportAppManifest.
+func (mr *MockAPIClientMockRecorder) ExportAppManifest(ctx, token, appID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExportManifestContext", reflect.TypeOf((*MockAPIClient)(nil).ExportManifestContext), ctx, token, appID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExportAppManifest", reflect.TypeOf((*MockAPIClient)(nil).ExportAppManifest), ctx, token, appID)
 }
 
 // GetConversationInfoContext mocks base method.
@@ -321,19 +321,19 @@ func (mr *MockAPIClientMockRecorder) SetTopicOfConversationContext(ctx, channelI
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTopicOfConversationContext", reflect.TypeOf((*MockAPIClient)(nil).SetTopicOfConversationContext), ctx, channelID, topic)
 }
 
-// UpdateManifestContext mocks base method.
-func (m *MockAPIClient) UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error) {
+// UpdateAppManifest mocks base method.
+func (m *MockAPIClient) UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateManifestContext", ctx, manifest, token, appID)
+	ret := m.ctrl.Call(m, "UpdateAppManifest", ctx, manifest, token, appID)
 	ret0, _ := ret[0].(*slack.UpdateManifestResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// UpdateManifestContext indicates an expected call of UpdateManifestContext.
-func (mr *MockAPIClientMockRecorder) UpdateManifestContext(ctx, manifest, token, appID any) *gomock.Call {
+// UpdateAppManifest indicates an expected call of UpdateAppManifest.
+func (mr *MockAPIClientMockRecorder) UpdateAppManifest(ctx, manifest, token, appID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateManifestContext", reflect.TypeOf((*MockAPIClient)(nil).UpdateManifestContext), ctx, manifest, token, appID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAppManifest", reflect.TypeOf((*MockAPIClient)(nil).UpdateAppManifest), ctx, manifest, token, appID)
 }
 
 // UpdateUserGroupContext mocks base method.

@@ -5,7 +5,13 @@
 // import cycle with internal's own in-package tests.
 package appmanifest
 
-import "github.com/slack-go/slack"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/slack-go/slack"
+)
 
 // CreateResponse is the response returned by apps.manifest.create.
 // github.com/slack-go/slack v0.15.0 decodes this endpoint into
@@ -25,4 +31,57 @@ type Credentials struct {
 	ClientSecret      string `json:"client_secret"`
 	VerificationToken string `json:"verification_token"`
 	SigningSecret     string `json:"signing_secret"`
+}
+
+// Document is an app manifest kept as generic JSON. apps.manifest.export is
+// decoded into it so that fields this provider does not model survive a
+// read-merge-write round trip through apps.manifest.update, which replaces
+// the whole manifest.
+type Document map[string]any
+
+// NewDocument converts a typed manifest into its generic JSON form.
+func NewDocument(manifest *slack.Manifest) (Document, error) {
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("marshal manifest: %w", err)
+	}
+	var doc Document
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("reparse manifest: %w", err)
+	}
+	return doc, nil
+}
+
+// Manifest decodes the generic JSON form into the typed manifest, dropping
+// the fields the typed manifest does not model.
+func (d Document) Manifest() (*slack.Manifest, error) {
+	body, err := json.Marshal(d)
+	if err != nil {
+		return nil, fmt.Errorf("marshal manifest document: %w", err)
+	}
+	var manifest slack.Manifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, fmt.Errorf("decode manifest document: %w", err)
+	}
+	return &manifest, nil
+}
+
+// Error is a failed apps.manifest.* call: the Slack error code plus the
+// validation errors Slack attaches to invalid manifests.
+type Error struct {
+	Method string
+	Code   string
+	Errors []slack.ManifestValidationError
+}
+
+// Error formats the failure with one pointer: message line per validation
+// error, so callers can see which part of the manifest Slack rejected instead
+// of just an error code.
+func (e *Error) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s", e.Method, e.Code)
+	for _, v := range e.Errors {
+		fmt.Fprintf(&b, "\n%s: %s", v.Pointer, v.Message)
+	}
+	return b.String()
 }

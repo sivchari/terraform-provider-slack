@@ -39,8 +39,8 @@ type APIClient interface {
 	CloseConversationContext(ctx context.Context, channelID string) (noOp bool, alreadyClosed bool, err error)
 	// App Manifests
 	CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error)
-	UpdateManifestContext(ctx context.Context, manifest *slack.Manifest, token, appID string) (*slack.UpdateManifestResponse, error)
-	ExportManifestContext(ctx context.Context, token, appID string) (*slack.Manifest, error)
+	UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error)
+	ExportAppManifest(ctx context.Context, token, appID string) (appmanifest.Document, error)
 	DeleteManifestContext(ctx context.Context, token, appID string) (*slack.SlackResponse, error)
 	HasBotToken() bool
 }
