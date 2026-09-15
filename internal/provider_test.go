@@ -68,10 +68,12 @@ func TestConfigure_TokenEnvFallback(t *testing.T) {
 			objType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{
 				"token":                   tftypes.String,
 				"app_configuration_token": tftypes.String,
+				"api_url":                 tftypes.String,
 			}}
 			raw := tftypes.NewValue(objType, map[string]tftypes.Value{
 				"token":                   tftypes.NewValue(tftypes.String, stringOrNil(tt.token)),
 				"app_configuration_token": tftypes.NewValue(tftypes.String, stringOrNil(tt.appConfigToken)),
+				"api_url":                 tftypes.NewValue(tftypes.String, nil),
 			})
 
 			var resp provider.ConfigureResponse

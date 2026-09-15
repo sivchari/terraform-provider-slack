@@ -4,9 +4,13 @@ package internal
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -52,6 +56,7 @@ type SlackProvider struct {
 type SlackProviderConfig struct {
 	Token                 types.String `tfsdk:"token"`
 	AppConfigurationToken types.String `tfsdk:"app_configuration_token"`
+	APIURL                types.String `tfsdk:"api_url"`
 }
 
 func New() func() provider.Provider {
@@ -83,6 +88,16 @@ func (m *SlackProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 					"workflows, since values set here are captured in the plan file at plan time and " +
 					"may expire before apply.",
 			},
+			"api_url": schema.StringAttribute{
+				Optional: true,
+				Description: "Base URL that every Slack API call is sent to, including the " +
+					"apps.manifest.* calls made by slack_app. Set this to point the provider at " +
+					"something other than slack.com, such as a proxy that only forwards read " +
+					"methods and injects the real tokens itself, so a plan job never holds a " +
+					"writable token. Must be an http or https URL; the trailing slash may be " +
+					"omitted. Falls back to the SLACK_API_URL environment variable when unset, " +
+					"and to " + DefaultAPIURL + " when that is empty too.",
+			},
 		},
 	}
 }
@@ -106,12 +121,43 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if appConfigToken == "" {
 		appConfigToken = os.Getenv("SLACK_APP_CONFIGURATION_TOKEN")
 	}
+	apiURL := cfg.APIURL.ValueString()
+	if apiURL == "" {
+		apiURL = os.Getenv("SLACK_API_URL")
+	}
+	if apiURL == "" {
+		apiURL = DefaultAPIURL
+	}
+	apiURL, err := normalizeAPIURL(apiURL)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("api_url"), "Invalid Slack API URL", err.Error())
+		return
+	}
 	if m.client == nil {
-		m.client = NewClient(token, appConfigToken, DefaultAPIURL)
+		m.client = NewClient(token, appConfigToken, apiURL)
 	}
 	resp.DataSourceData = m.client
 	resp.ResourceData = m.client
 	tflog.Info(ctx, "configured slack-provider")
+}
+
+// normalizeAPIURL validates the API base URL and ensures it ends with a
+// slash, since both slack-go and Client append method names to it directly.
+func normalizeAPIURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("%q is not a valid URL: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("%q must use the http or https scheme", raw)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("%q has no host", raw)
+	}
+	if !strings.HasSuffix(raw, "/") {
+		raw += "/"
+	}
+	return raw, nil
 }
 
 func (m *SlackProvider) Resources(_ context.Context) []func() resource.Resource {
