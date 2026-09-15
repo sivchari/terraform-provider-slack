@@ -107,7 +107,7 @@ func (m *SlackProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		appConfigToken = os.Getenv("SLACK_APP_CONFIGURATION_TOKEN")
 	}
 	if m.client == nil {
-		m.client = NewClient(token, appConfigToken)
+		m.client = NewClient(token, appConfigToken, DefaultAPIURL)
 	}
 	resp.DataSourceData = m.client
 	resp.ResourceData = m.client

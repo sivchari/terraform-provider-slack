@@ -40,8 +40,7 @@ func TestClientCreateAppManifest(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "", server.URL+"/")
 
 	resp, err := client.CreateAppManifest(context.Background(), &slack.Manifest{
 		Display: slack.Display{Name: "test"},
@@ -75,8 +74,7 @@ func TestClientCreateAppManifest_Error(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "config-token")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "config-token", server.URL+"/")
 
 	_, err := client.CreateAppManifest(context.Background(), &slack.Manifest{}, "")
 	if err == nil {
@@ -110,8 +108,7 @@ func TestClientUpdateAppManifest(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "config-token")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "config-token", server.URL+"/")
 
 	manifest := appmanifest.Document{
 		"display_information": map[string]any{"name": "test"},
@@ -167,8 +164,7 @@ func TestClientUpdateAppManifest_Error(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "config-token")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "config-token", server.URL+"/")
 
 	_, err := client.UpdateAppManifest(context.Background(), appmanifest.Document{
 		"display_information": map[string]any{"name": "test"},
@@ -341,8 +337,7 @@ func TestClientExportAppManifest(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "config-token")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "config-token", server.URL+"/")
 
 	doc, err := client.ExportAppManifest(context.Background(), "", "A012345678")
 	if err != nil {
@@ -375,8 +370,7 @@ func TestClientExportAppManifest_NotFound(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewClient("bot-token", "config-token")
-	client.apiURL = server.URL + "/"
+	client := NewClient("bot-token", "config-token", server.URL+"/")
 
 	_, err := client.ExportAppManifest(context.Background(), "", "A012345678")
 	var apiErr *appmanifest.Error
