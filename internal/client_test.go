@@ -385,3 +385,44 @@ func TestClientExportAppManifest_NotFound(t *testing.T) {
 		t.Errorf("error = %q, want %q", got, "apps.manifest.export: app_not_found")
 	}
 }
+
+// TestNewClient_APIURL guards the two wirings of apiURL: the raw HTTP
+// manifest calls and the embedded *slack.Client (slack.OptionAPIURL). If
+// either one is dropped, a method still reaches slack.com.
+func TestNewClient_APIURL(t *testing.T) {
+	t.Parallel()
+
+	var gotPaths []string
+	var gotTokens []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("failed to parse form: %v", err)
+		}
+		gotPaths = append(gotPaths, r.URL.Path)
+		gotTokens = append(gotTokens, r.FormValue("token"))
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok": true, "manifest": {"display_information": {"name": "test"}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("bot-token", "config-token", server.URL+"/")
+
+	if _, err := client.ExportAppManifest(context.Background(), "", "A012345678"); err != nil {
+		t.Errorf("ExportAppManifest() error = %v", err)
+		return
+	}
+	if _, err := client.DeleteManifestContext(context.Background(), "", "A012345678"); err != nil {
+		t.Errorf("DeleteManifestContext() error = %v", err)
+		return
+	}
+
+	wantPaths := []string{"/apps.manifest.export", "/apps.manifest.delete"}
+	if strings.Join(gotPaths, ",") != strings.Join(wantPaths, ",") {
+		t.Errorf("paths = %v, want %v", gotPaths, wantPaths)
+	}
+	wantTokens := []string{"config-token", "config-token"}
+	if strings.Join(gotTokens, ",") != strings.Join(wantTokens, ",") {
+		t.Errorf("tokens = %v, want %v", gotTokens, wantTokens)
+	}
+}
