@@ -14,7 +14,9 @@ import (
 	"github.com/slack-go/slack"
 )
 
-const defaultManifestAPIURL = "https://slack.com/api/"
+// DefaultAPIURL is the Slack Web API endpoint used when the provider's
+// api_url attribute and SLACK_API_URL are both unset.
+const DefaultAPIURL = "https://slack.com/api/"
 
 // Client wraps *slack.Client to additionally support the parts of the Slack
 // App Manifest API that github.com/slack-go/slack v0.15.0 does not expose.
@@ -28,16 +30,18 @@ type Client struct {
 
 // NewClient builds a Client authenticated with the bot token, optionally
 // carrying an app configuration token used as the default for app manifest
-// and token rotation calls.
-func NewClient(token, configurationToken string) *Client {
-	var opts []slack.Option
+// and token rotation calls. Every request, whether issued through the
+// embedded *slack.Client or the raw manifest calls below, is sent to apiURL,
+// which must end with a slash (see DefaultAPIURL).
+func NewClient(token, configurationToken, apiURL string) *Client {
+	opts := []slack.Option{slack.OptionAPIURL(apiURL)}
 	if configurationToken != "" {
 		opts = append(opts, slack.OptionConfigToken(configurationToken))
 	}
 	return &Client{
 		Client:      slack.New(token, opts...),
 		httpClient:  http.DefaultClient,
-		apiURL:      defaultManifestAPIURL,
+		apiURL:      apiURL,
 		configToken: configurationToken,
 		hasToken:    token != "",
 	}

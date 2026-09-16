@@ -138,6 +138,19 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 	}
 
 	res.Schema = schema.Schema{
+		MarkdownDescription: "Manages a Slack app through its app manifest.\n\n" +
+			"Existing apps can be imported with their app ID (for example\n" +
+			"`terraform import slack_app.example A0123456789`). The credential\n" +
+			"attributes (`client_id`, `client_secret`, `verification_token`,\n" +
+			"`signing_secret`, `oauth_authorize_url`) are only returned by\n" +
+			"`apps.manifest.create` and cannot be recovered afterwards, so they stay\n" +
+			"null for imported apps.\n\n" +
+			"Updates go through `apps.manifest.update`, which replaces the whole\n" +
+			"manifest. The provider therefore exports the current manifest first and\n" +
+			"only overlays the fields in this schema, so manifest fields it does not\n" +
+			"model (for example `features.unfurl_domains`, `functions` or\n" +
+			"`settings.token_rotation_enabled`) are kept as they are. Such fields\n" +
+			"cannot be changed or removed through Terraform.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
