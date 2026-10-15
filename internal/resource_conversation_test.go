@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -286,7 +287,7 @@ func TestAccConversationResourceAdoptNotFound(t *testing.T) {
 				Config: testAccConversationConfig(`
 	name = "adopted"
 	adopt_existing_channel = true`),
-				ExpectError: regexp.MustCompile(`name_taken`),
+				ExpectError: regexp.MustCompile(`(?s)name_taken.*private\s+channel\s+the\s+bot`),
 			},
 		},
 	})
@@ -476,6 +477,191 @@ func TestAccConversationResourceRename(t *testing.T) {
 	})
 }
 
+func TestAccConversationResourceImportDirectMessage(t *testing.T) {
+	t.Parallel()
+
+	testAccConversationImportRejected(t, "D1", func(c *slack.Channel) { c.IsIM = true })
+}
+
+func TestAccConversationResourceImportMultiPartyDirectMessage(t *testing.T) {
+	t.Parallel()
+
+	testAccConversationImportRejected(t, "G1", func(c *slack.Channel) { c.IsMpIM = true })
+}
+
+// testAccConversationImportRejected asserts that importing a conversation of
+// a kind this resource cannot archive fails before anything is read or changed.
+func testAccConversationImportRejected(t *testing.T, id string, kind func(*slack.Channel)) {
+	t.Helper()
+
+	f := &fakeChannel{channel: testChannel(id, "")}
+	kind(&f.channel)
+	client := newConversationClient(t, f)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config:        testAccConversationConfig(`name = "dm"`),
+				ResourceName:  "slack_conversation.test",
+				ImportState:   true,
+				ImportStateId: id,
+				ExpectError:   regexp.MustCompile(`(?s)public\s+and\s+private\s+channels\s+only`),
+			},
+		},
+	})
+}
+
+func TestAccConversationResourceAdoptPublicChannelJoinsTheBot(t *testing.T) {
+	t.Parallel()
+
+	adopted := testChannel("C9", "adopted")
+	f := &fakeChannel{channel: adopted, members: []string{"U5"}}
+	client := newConversationClient(t, f)
+	expectMembersRead(client, f)
+	client.EXPECT().CreateConversationContext(gomock.Any(), slack.CreateConversationParams{ChannelName: "adopted"}).
+		Return(nil, slack.SlackErrorResponse{Err: "name_taken"}).Times(1)
+	client.EXPECT().GetConversationsContext(gomock.Any(), gomock.Any()).Return([]slack.Channel{adopted}, "", nil).Times(1)
+	join := client.EXPECT().JoinConversationContext(gomock.Any(), "C9").DoAndReturn(f.join).Times(1)
+	// Topic, invite and kick need the bot in the channel, so they must follow the join.
+	client.EXPECT().SetTopicOfConversationContext(gomock.Any(), "C9", "t").DoAndReturn(f.setTopic).Times(1).After(join)
+	client.EXPECT().InviteUsersToConversationContext(gomock.Any(), "C9", "U1").DoAndReturn(f.invite).Times(1).After(join)
+	client.EXPECT().KickUserFromConversationContext(gomock.Any(), "C9", "U5").DoAndReturn(f.kick).Times(1).After(join)
+	client.EXPECT().ArchiveConversationContext(gomock.Any(), "C9").DoAndReturn(f.archive).Times(1)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccConversationConfig(`
+	name = "adopted"
+	adopt_existing_channel = true
+	topic = "t"
+	members = ["U1"]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_conversation.test", "id", "C9"),
+					resource.TestCheckResourceAttr("slack_conversation.test", "topic", "t"),
+					resource.TestCheckResourceAttr("slack_conversation.test", "members.#", "1"),
+					resource.TestCheckResourceAttr("slack_conversation.test", "members.0", "U1"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccConversationResourceAdoptPrivateChannelWithoutMembership(t *testing.T) {
+	t.Parallel()
+
+	adopted := testChannel("C9", "adopted")
+	adopted.IsPrivate = true
+	f := &fakeChannel{channel: adopted, members: []string{"U5"}}
+	client := newConversationClient(t, f)
+	expectMembersRead(client, f)
+	client.EXPECT().CreateConversationContext(gomock.Any(), slack.CreateConversationParams{ChannelName: "adopted", IsPrivate: true}).
+		Return(nil, slack.SlackErrorResponse{Err: "name_taken"}).Times(1)
+	client.EXPECT().GetConversationsContext(gomock.Any(), gomock.Any()).Return([]slack.Channel{adopted}, "", nil).Times(1)
+	// Joining, topic, invite, kick and archive have no expectation: a private
+	// channel cannot be joined, and nothing may change before the error.
+	client.EXPECT().JoinConversationContext(gomock.Any(), gomock.Any()).Times(0)
+	client.EXPECT().ArchiveConversationContext(gomock.Any(), gomock.Any()).Times(0)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccConversationConfig(`
+	name = "adopted"
+	is_private = true
+	adopt_existing_channel = true
+	topic = "t"
+	members = ["U1"]`),
+				ExpectError: regexp.MustCompile(`(?s)private.*Invite\s+the\s+bot`),
+			},
+		},
+	})
+}
+
+func TestAccConversationResourceAdoptEnforcesTopicAndPurpose(t *testing.T) {
+	t.Parallel()
+
+	adopted := testChannel("C9", "adopted")
+	adopted.Topic.Value = "old"
+	adopted.Purpose.Value = "same"
+	f := &fakeChannel{channel: adopted, members: []string{testBotID}}
+	client := newConversationClient(t, f)
+	expectMembersRead(client, f)
+	client.EXPECT().CreateConversationContext(gomock.Any(), slack.CreateConversationParams{ChannelName: "adopted"}).
+		Return(nil, slack.SlackErrorResponse{Err: "name_taken"}).Times(1)
+	client.EXPECT().GetConversationsContext(gomock.Any(), gomock.Any()).Return([]slack.Channel{adopted}, "", nil).Times(1)
+	// The unset topic overwrites "old"; the purpose already matches, so
+	// conversations.setPurpose has no expectation and must not be called.
+	client.EXPECT().SetTopicOfConversationContext(gomock.Any(), "C9", "").DoAndReturn(f.setTopic).Times(1)
+	client.EXPECT().ArchiveConversationContext(gomock.Any(), "C9").DoAndReturn(f.archive).Times(1)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccConversationConfig(`
+	name = "adopted"
+	adopt_existing_channel = true
+	purpose = "same"`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("slack_conversation.test", "topic"),
+					resource.TestCheckResourceAttr("slack_conversation.test", "purpose", "same"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccConversationResourceDuplicateMembers(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeChannel{}
+	client := newConversationClient(t, f)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccConversationConfig(`
+	name = "dup"
+	members = ["U1", "U2", "U1"]`),
+				ExpectError: regexp.MustCompile(`(?s)"U1"\s+appears\s+more\s+than\s+once`),
+			},
+		},
+	})
+}
+
+// TestAccConversationResourceCreateFailureKeepsChannelInState asserts that a
+// failure after conversations.create leaves the channel in state as tainted, so
+// the final destroy archives it instead of leaving an orphan in Slack.
+func TestAccConversationResourceCreateFailureKeepsChannelInState(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeChannel{}
+	client := newConversationClient(t, f)
+	expectMembersRead(client, f)
+	client.EXPECT().CreateConversationContext(gomock.Any(), slack.CreateConversationParams{ChannelName: "partial"}).
+		DoAndReturn(f.create).Times(1)
+	client.EXPECT().SetTopicOfConversationContext(gomock.Any(), "C1", "t").
+		Return(nil, errors.New("topic failed")).Times(1)
+	client.EXPECT().ArchiveConversationContext(gomock.Any(), "C1").DoAndReturn(f.archive).Times(1)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccConversationConfig(`
+	name = "partial"
+	topic = "t"`),
+				ExpectError: regexp.MustCompile(`topic failed`),
+			},
+		},
+	})
+}
+
 func testAccConversationConfig(attrs string) string {
 	return providerConfig + `
 resource "slack_conversation" "test" {
@@ -556,6 +742,13 @@ func (f *fakeChannel) users(_ context.Context, params *slack.GetUsersInConversat
 		next = strconv.Itoa(end)
 	}
 	return append([]string(nil), f.members[start:end]...), next, nil
+}
+
+func (f *fakeChannel) join(context.Context, string) (*slack.Channel, string, []string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.members = append(f.members, testBotID)
+	return f.snapshot(), "", nil, nil
 }
 
 func (f *fakeChannel) setTopic(_ context.Context, _, topic string) (*slack.Channel, error) {
