@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -84,6 +85,92 @@ func TestCreateOnlyString_PlanModifyString(t *testing.T) {
 
 			if !resp.PlanValue.Equal(tt.wantPlan) {
 				t.Errorf("PlanValue = %v, want %v", resp.PlanValue, tt.wantPlan)
+			}
+		})
+	}
+}
+
+func TestImmutableBool_PlanModifyBool(t *testing.T) {
+	t.Parallel()
+
+	objType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{"is_private": tftypes.Bool}}
+	nonNullRaw := tftypes.NewValue(objType, map[string]tftypes.Value{
+		"is_private": tftypes.NewValue(tftypes.Bool, true),
+	})
+	nullRaw := tftypes.NewValue(objType, nil)
+
+	tests := []struct {
+		name     string
+		stateRaw tftypes.Value
+		planRaw  tftypes.Value
+		stateVal types.Bool
+		planVal  types.Bool
+		wantErr  bool
+	}{
+		{
+			name:     "create is allowed",
+			stateRaw: nullRaw,
+			planRaw:  nonNullRaw,
+			stateVal: types.BoolNull(),
+			planVal:  types.BoolValue(true),
+		},
+		{
+			name:     "destroy is allowed",
+			stateRaw: nonNullRaw,
+			planRaw:  nullRaw,
+			stateVal: types.BoolValue(true),
+			planVal:  types.BoolNull(),
+		},
+		{
+			name:     "unchanged value is allowed",
+			stateRaw: nonNullRaw,
+			planRaw:  nonNullRaw,
+			stateVal: types.BoolValue(true),
+			planVal:  types.BoolValue(true),
+		},
+		{
+			name:     "unknown plan value is allowed",
+			stateRaw: nonNullRaw,
+			planRaw:  nonNullRaw,
+			stateVal: types.BoolValue(true),
+			planVal:  types.BoolUnknown(),
+		},
+		{
+			name:     "null state value is allowed",
+			stateRaw: nonNullRaw,
+			planRaw:  nonNullRaw,
+			stateVal: types.BoolNull(),
+			planVal:  types.BoolValue(true),
+		},
+		{
+			name:     "changed value is rejected",
+			stateRaw: nonNullRaw,
+			planRaw:  nonNullRaw,
+			stateVal: types.BoolValue(true),
+			planVal:  types.BoolValue(false),
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := planmodifier.BoolRequest{
+				Path:       path.Root("is_private"),
+				State:      tfsdk.State{Raw: tt.stateRaw},
+				Plan:       tfsdk.Plan{Raw: tt.planRaw},
+				StateValue: tt.stateVal,
+				PlanValue:  tt.planVal,
+			}
+			resp := planmodifier.BoolResponse{PlanValue: tt.planVal}
+			immutableBool("cannot be converted").PlanModifyBool(context.Background(), req, &resp)
+
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Errorf("HasError() = %v, want %v (diagnostics: %v)", got, tt.wantErr, resp.Diagnostics)
+			}
+			if !resp.PlanValue.Equal(tt.planVal) {
+				t.Errorf("PlanValue = %v, want it untouched (%v)", resp.PlanValue, tt.planVal)
 			}
 		})
 	}
