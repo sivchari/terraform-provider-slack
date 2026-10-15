@@ -3,12 +3,17 @@
 page_title: "slack_conversation Resource - terraform-provider-slack"
 subcategory: ""
 description: |-
-  
+  Manages a public or private Slack channel.
+  Existing channels can be imported with their channel ID. Direct messages
+  cannot be imported, because Slack has no API to archive them.
 ---
 
 # slack_conversation (Resource)
 
+Manages a public or private Slack channel.
 
+Existing channels can be imported with their channel ID. Direct messages
+cannot be imported, because Slack has no API to archive them.
 
 
 
@@ -22,9 +27,9 @@ description: |-
 ### Optional
 
 - `action_on_destroy` (String) What destroying the resource does: "archive" (default) archives the channel and "none" leaves it untouched in Slack and only removes it from state. Slack has no API to delete a channel, and unarchiving requires a user token, so archived channels cannot be restored by this provider.
-- `adopt_existing_channel` (Boolean) Whether to manage a channel that already has this name instead of failing with name_taken on create. Archived channels cannot be adopted. After adopting, members (when set) is enforced on the existing channel, so users not listed are removed, and topic and purpose from the configuration overwrite the existing ones.
+- `adopt_existing_channel` (Boolean) Whether to manage a channel that already has this name instead of failing with name_taken on create. Archived channels cannot be adopted. Adopting a public channel makes the bot join it. A private channel cannot be joined by the bot, so invite the bot to it first. After adopting, members (when set) is enforced on the existing channel, so users not listed are removed, and topic and purpose from the configuration overwrite the existing ones, an unset one clearing the existing text.
 - `is_private` (Boolean) Whether the channel is private. Slack has no API to convert a channel between public and private, so changing this on an existing channel is rejected.
-- `members` (List of String) User IDs of the channel members. When set, the channel is made to contain exactly these users: missing users are invited and other users are removed. The bot that owns the provider token is never invited or removed. When unset, membership is not managed.
+- `members` (List of String) User IDs of the channel members. When set, the channel is made to contain exactly these users: missing users are invited and other users are removed. The bot that owns the provider token is never invited or removed. Elements must be unique. When unset, membership is not managed.
 - `purpose` (String) The channel purpose. Removing it from the configuration clears the purpose in Slack.
 - `topic` (String) The channel topic. Removing it from the configuration clears the topic in Slack.
 
