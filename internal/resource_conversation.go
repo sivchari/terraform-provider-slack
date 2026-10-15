@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -57,6 +58,9 @@ func (r *ResourceConversation) Metadata(_ context.Context, req resource.Metadata
 
 func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaRequest, res *resource.SchemaResponse) {
 	res.Schema = schema.Schema{
+		MarkdownDescription: "Manages a public or private Slack channel.\n\n" +
+			"Existing channels can be imported with their channel ID. Direct messages\n" +
+			"cannot be imported, because Slack has no API to archive them.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -87,9 +91,10 @@ func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaReques
 			"members": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Validators:  []validator.List{uniqueStrings()},
 				Description: "User IDs of the channel members. When set, the channel is made to contain exactly these users: " +
 					"missing users are invited and other users are removed. The bot that owns the provider token is never " +
-					"invited or removed. When unset, membership is not managed.",
+					"invited or removed. Elements must be unique. When unset, membership is not managed.",
 			},
 			"action_on_destroy": schema.StringAttribute{
 				Optional: true,
@@ -105,9 +110,10 @@ func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaReques
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
 				Description: "Whether to manage a channel that already has this name instead of failing with name_taken " +
-					"on create. Archived channels cannot be adopted. After adopting, members (when set) is enforced on the " +
-					"existing channel, so users not listed are removed, and topic and purpose from the configuration " +
-					"overwrite the existing ones.",
+					"on create. Archived channels cannot be adopted. Adopting a public channel makes the bot join it. A " +
+					"private channel cannot be joined by the bot, so invite the bot to it first. After adopting, members " +
+					"(when set) is enforced on the existing channel, so users not listed are removed, and topic and " +
+					"purpose from the configuration overwrite the existing ones, an unset one clearing the existing text.",
 			},
 		},
 	}
@@ -137,6 +143,14 @@ func (r *ResourceConversation) ImportState(ctx context.Context, req resource.Imp
 		res.Diagnostics.AddError(
 			fmt.Sprintf("the conversation with the id %s does not exist", id),
 			err.Error(),
+		)
+		return
+	}
+	if channel.IsIM || channel.IsMpIM {
+		res.Diagnostics.AddError(
+			fmt.Sprintf("cannot import the conversation %s", id),
+			"slack_conversation manages public and private channels only: direct messages cannot be archived, "+
+				"so the resource could not be destroyed.",
 		)
 		return
 	}
@@ -180,35 +194,43 @@ func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	channel, adopted := r.createOrAdopt(ctx, plan, &res.Diagnostics)
+	channel, current, adopted := r.createOrAdopt(ctx, plan, &res.Diagnostics)
 	if res.Diagnostics.HasError() {
 		return
 	}
 
-	if !plan.Topic.IsNull() {
-		if _, err := r.client.SetTopicOfConversationContext(ctx, channel.ID, plan.Topic.ValueString()); err != nil {
+	// Record the channel before the follow-up calls: if one fails, the resource
+	// is tainted in state and destroyed later instead of being orphaned in Slack.
+	partial := ResourceConversationState{
+		ID:                   types.StringValue(channel.ID),
+		Name:                 types.StringValue(channel.Name),
+		Topic:                types.StringNull(),
+		Purpose:              types.StringNull(),
+		IsPrivate:            types.BoolValue(channel.IsPrivate),
+		Members:              types.ListNull(types.StringType),
+		ActionOnDestroy:      plan.ActionOnDestroy,
+		AdoptExistingChannel: plan.AdoptExistingChannel,
+	}
+	res.Diagnostics.Append(res.State.Set(ctx, &partial)...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+
+	if topic, ok := textUpdate(plan.Topic, channel.Topic.Value, adopted); ok {
+		if _, err := r.client.SetTopicOfConversationContext(ctx, channel.ID, topic); err != nil {
 			res.Diagnostics.AddError("failed to set topic of conversation", err.Error())
 			return
 		}
 	}
 
-	if !plan.Purpose.IsNull() {
-		if _, err := r.client.SetPurposeOfConversationContext(ctx, channel.ID, plan.Purpose.ValueString()); err != nil {
+	if purpose, ok := textUpdate(plan.Purpose, channel.Purpose.Value, adopted); ok {
+		if _, err := r.client.SetPurposeOfConversationContext(ctx, channel.ID, purpose); err != nil {
 			res.Diagnostics.AddError("failed to set purpose of conversation", err.Error())
 			return
 		}
 	}
 
 	if !plan.Members.IsNull() {
-		// A channel created just now only holds its creator, which is the bot.
-		var current []string
-		if adopted {
-			var err error
-			if current, err = allConversationMembers(ctx, r.client, channel.ID); err != nil {
-				res.Diagnostics.AddError("failed to get users in conversation", err.Error())
-				return
-			}
-		}
 		if err := r.syncMembers(ctx, channel.ID, plan.Members, current); err != nil {
 			res.Diagnostics.AddError("failed to set members of conversation", err.Error())
 			return
@@ -228,29 +250,43 @@ func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRe
 	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
 }
 
+// textUpdate returns the topic or purpose to send to Slack and whether to send
+// it. A new channel only needs it when configured. An adopted channel already
+// holds text, so the configuration, an unset one meaning "", overwrites it
+// whenever the two differ.
+func textUpdate(plan types.String, current string, adopted bool) (text string, send bool) {
+	if adopted {
+		return plan.ValueString(), plan.ValueString() != current
+	}
+	return plan.ValueString(), !plan.IsNull()
+}
+
 // createOrAdopt creates the channel, or with adopt_existing_channel returns the
-// existing channel when the name is taken. adopted reports the latter.
+// existing channel when the name is taken. adopted reports the latter, and
+// members then lists the users in the channel, the bot included once it has
+// joined. A channel created just now holds only its creator, the bot, so
+// members is nil.
 func (r *ResourceConversation) createOrAdopt(
 	ctx context.Context,
 	plan ResourceConversationState,
 	diags *diag.Diagnostics,
-) (channel *slack.Channel, adopted bool) {
+) (channel *slack.Channel, members []string, adopted bool) {
 	channel, err := r.client.CreateConversationContext(ctx, slack.CreateConversationParams{
 		ChannelName: plan.Name.ValueString(),
 		IsPrivate:   plan.IsPrivate.ValueBool(),
 	})
 	if err == nil {
-		return channel, false
+		return channel, nil, false
 	}
 	if !isSlackError(err, "name_taken") {
 		diags.AddError("failed to create conversation", err.Error())
-		return nil, false
+		return nil, nil, false
 	}
 	if !plan.AdoptExistingChannel.ValueBool() {
 		diags.AddError("failed to create conversation", err.Error()+
 			": set adopt_existing_channel = true to manage the existing channel. "+
 			"Archived channels keep their name, so an archived channel also causes this error.")
-		return nil, false
+		return nil, nil, false
 	}
 
 	existing, findErr := findConversationByName(ctx, r.client, plan.Name.ValueString())
@@ -258,7 +294,9 @@ func (r *ResourceConversation) createOrAdopt(
 	case findErr != nil:
 		diags.AddError("failed to look up the existing conversation", findErr.Error())
 	case existing == nil:
-		diags.AddError("failed to create conversation", err.Error())
+		diags.AddError("failed to create conversation", err.Error()+
+			": adopt_existing_channel is set but the bot sees no channel with this name. "+
+			"It may be a private channel the bot has not been invited to.")
 	case existing.IsArchived:
 		diags.AddError(
 			"cannot adopt an archived conversation",
@@ -272,9 +310,50 @@ func (r *ResourceConversation) createOrAdopt(
 				existing.ID, existing.IsPrivate, plan.IsPrivate.ValueBool(), privacyImmutableDetail),
 		)
 	default:
-		return existing, true
+		var ok bool
+		if members, ok = r.ensureBotMember(ctx, existing, diags); ok {
+			return existing, members, true
+		}
 	}
-	return nil, false
+	return nil, nil, false
+}
+
+// ensureBotMember returns the members of the channel after making the bot one
+// of them: topic, purpose and membership changes need the bot in the channel.
+// A public channel is joined; a private one can only be joined by invitation,
+// so it is reported as an error.
+func (r *ResourceConversation) ensureBotMember(
+	ctx context.Context,
+	channel *slack.Channel,
+	diags *diag.Diagnostics,
+) (members []string, ok bool) {
+	botID, err := r.botUserID(ctx)
+	if err != nil {
+		diags.AddError("failed to identify the bot user", err.Error())
+		return nil, false
+	}
+	members, err = allConversationMembers(ctx, r.client, channel.ID)
+	if err != nil {
+		diags.AddError("failed to get users in conversation", err.Error())
+		return nil, false
+	}
+	if slices.Contains(members, botID) {
+		return members, true
+	}
+
+	if channel.IsPrivate {
+		diags.AddError(
+			"cannot adopt a private conversation the bot is not a member of",
+			fmt.Sprintf("The bot cannot join the private conversation %s itself. Invite the bot (user %s) to it in Slack, "+
+				"then apply again.", channel.ID, botID),
+		)
+		return nil, false
+	}
+	if _, _, _, err := r.client.JoinConversationContext(ctx, channel.ID); err != nil {
+		diags.AddError("failed to join conversation", err.Error())
+		return nil, false
+	}
+	return append(members, botID), true
 }
 
 func (r *ResourceConversation) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
