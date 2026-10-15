@@ -27,6 +27,10 @@ type fakeUserGroups struct {
 	group    *slack.UserGroup
 	seq      int
 	listArgs []slack.GetUserGroupsParams
+	// calls records the mutating methods in the order they ran.
+	calls []string
+	// failDisable is how many upcoming disable calls fail.
+	failDisable int
 }
 
 func newFakeUserGroups() *fakeUserGroups {
@@ -51,6 +55,7 @@ func (f *fakeUserGroups) create(_ context.Context, in slack.UserGroup) (slack.Us
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls = append(f.calls, "create")
 	f.seq++
 	g := in
 	g.ID = fmt.Sprintf("S%03d", f.seq)
@@ -79,6 +84,9 @@ func (f *fakeUserGroups) list(_ context.Context, opts ...slack.GetUserGroupsOpti
 	if f.group == nil || (f.group.DateDelete != 0 && !params.IncludeDisabled) {
 		return nil, nil
 	}
+	if params.TeamID != "" && params.TeamID != f.group.TeamID {
+		return nil, nil
+	}
 	g := f.copyGroup()
 	if !params.IncludeUsers {
 		g.Users = nil
@@ -90,6 +98,7 @@ func (f *fakeUserGroups) update(_ context.Context, id string, opts ...slack.Upda
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls = append(f.calls, "update")
 	if err := f.find(id); err != nil {
 		return slack.UserGroup{}, err
 	}
@@ -116,6 +125,7 @@ func (f *fakeUserGroups) setMembers(_ context.Context, id, members string) (slac
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls = append(f.calls, "members")
 	if err := f.find(id); err != nil {
 		return slack.UserGroup{}, err
 	}
@@ -130,6 +140,7 @@ func (f *fakeUserGroups) enable(_ context.Context, id string) (slack.UserGroup, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls = append(f.calls, "enable")
 	if err := f.find(id); err != nil {
 		return slack.UserGroup{}, err
 	}
@@ -141,6 +152,11 @@ func (f *fakeUserGroups) disable(_ context.Context, id string) (slack.UserGroup,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.calls = append(f.calls, "disable")
+	if f.failDisable > 0 {
+		f.failDisable--
+		return slack.UserGroup{}, slack.SlackErrorResponse{Err: "internal_error"}
+	}
 	if err := f.find(id); err != nil {
 		return slack.UserGroup{}, err
 	}
@@ -159,6 +175,12 @@ func (f *fakeUserGroups) drop() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.group = nil
+}
+
+func (f *fakeUserGroups) callLog() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.calls, ",")
 }
 
 func (f *fakeUserGroups) snapshot() slack.UserGroup {
@@ -476,25 +498,49 @@ func TestAccUserGroupResource_EmptyUsersRejected(t *testing.T) {
 	t.Parallel()
 
 	f := newFakeUserGroups()
-	client, _ := newUserGroupClient(t, f, userGroupCalls{create: 1, members: 1, disable: 1})
+	client, _ := newUserGroupClient(t, f, userGroupCalls{})
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
 		Steps: []resource.TestStep{
-			{Config: testAccUserGroupConfig(`
-	name  = "eng"
-	users = ["U1"]`)},
 			{
 				Config: testAccUserGroupConfig(`
 	name  = "eng"
 	users = []`),
-				ExpectError: regexp.MustCompile(`no_users_provided`),
+				ExpectError: regexp.MustCompile(`(?is)omit\s+users\s+to\s+leave\s+membership\s+unmanaged`),
 			},
 		},
 	})
+}
 
-	if got := f.snapshot(); strings.Join(got.Users, ",") != "U1" {
-		t.Errorf("remote users = %v, want [U1] untouched", got.Users)
+func TestAccUserGroupResource_DuplicateMembersRejected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "users", body: `users = ["U1", "U1"]`},
+		{name: "channels", body: `channels = ["C1", "C1"]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFakeUserGroups()
+			client, _ := newUserGroupClient(t, f, userGroupCalls{})
+
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+				Steps: []resource.TestStep{
+					{
+						Config:      testAccUserGroupConfig("name = \"eng\"\n" + tt.body),
+						ExpectError: regexp.MustCompile(`Duplicate list element`),
+					},
+				},
+			})
+		})
 	}
 }
 
@@ -513,7 +559,7 @@ func TestAccUserGroupResource_ComputedFromSlack(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testUserGroupAddr, "handle", "auto-eng"),
 					resource.TestCheckResourceAttr(testUserGroupAddr, "team_id", testUserGroupTeamID),
-					resource.TestCheckResourceAttr(testUserGroupAddr, "description", ""),
+					resource.TestCheckNoResourceAttr(testUserGroupAddr, "description"),
 					resource.TestCheckResourceAttr(testUserGroupAddr, "enabled", "true"),
 					resource.TestCheckNoResourceAttr(testUserGroupAddr, "users.#"),
 				),
@@ -540,6 +586,169 @@ func TestAccUserGroupResource_ImportNotFound(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestAccUserGroupResource_ImportWithTeamID(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeUserGroups()
+	client, _ := newUserGroupClient(t, f, userGroupCalls{create: 1, disable: 1})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{Config: testAccUserGroupConfig(`name = "eng"`)},
+			{
+				ResourceName:      testUserGroupAddr,
+				ImportState:       true,
+				ImportStateId:     testUserGroupTeamID + "/S001",
+				ImportStateVerify: true,
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					if len(states) != 1 || states[0].Attributes["team_id"] != testUserGroupTeamID {
+						return fmt.Errorf("imported states = %v, want one state with team_id %s", states, testUserGroupTeamID)
+					}
+					return nil
+				},
+			},
+			{
+				// The fake only lists groups of the requested team, so finding
+				// nothing proves the team ID reached usergroups.list.
+				ResourceName:  testUserGroupAddr,
+				ImportState:   true,
+				ImportStateId: "T999/S001",
+				ExpectError:   regexp.MustCompile(`does not exist`),
+			},
+			{
+				ResourceName:  testUserGroupAddr,
+				ImportState:   true,
+				ImportStateId: "T001/S001/extra",
+				ExpectError:   regexp.MustCompile(`Invalid import ID`),
+			},
+		},
+	})
+}
+
+func TestParseUserGroupImportID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		id         string
+		wantTeamID string
+		wantID     string
+		wantErr    bool
+	}{
+		{name: "usergroup only", id: "S001", wantID: "S001"},
+		{name: "team and usergroup", id: "T001/S001", wantTeamID: "T001", wantID: "S001"},
+		{name: "empty", id: "", wantErr: true},
+		{name: "empty team", id: "/S001", wantErr: true},
+		{name: "empty usergroup", id: "T001/", wantErr: true},
+		{name: "extra segment", id: "T001/S001/x", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			teamID, id, err := parseUserGroupImportID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseUserGroupImportID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+				return
+			}
+			if teamID != tt.wantTeamID || id != tt.wantID {
+				t.Errorf("parseUserGroupImportID(%q) = (%q, %q), want (%q, %q)", tt.id, teamID, id, tt.wantTeamID, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestAccUserGroupResource_CreateDisabledFailure(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeUserGroups()
+	f.failDisable = 1
+	// The failed disable after create is retried by the destroy of the tainted group.
+	client, _ := newUserGroupClient(t, f, userGroupCalls{create: 1, disable: 2})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserGroupConfig(`
+	name    = "retired"
+	enabled = false`),
+				ExpectError: regexp.MustCompile(`failed to disable user group`),
+			},
+		},
+	})
+
+	if got := f.snapshot(); got.DateDelete == 0 {
+		t.Error("remote group is enabled after destroy, want disabled")
+	}
+}
+
+func TestAccUserGroupResource_EditWhileDisabled(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeUserGroups()
+	client, _ := newUserGroupClient(t, f, userGroupCalls{create: 1, update: 1, members: 2, enable: 1, disable: 2})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserGroupConfig(`
+	name    = "before"
+	users   = ["U1"]
+	enabled = false`),
+				Check: resource.TestCheckResourceAttr(testUserGroupAddr, "enabled", "false"),
+			},
+			{
+				Config: testAccUserGroupConfig(`
+	name    = "after"
+	users   = ["U2"]
+	enabled = false`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(testUserGroupAddr, "name", "after"),
+					resource.TestCheckResourceAttr(testUserGroupAddr, "enabled", "false"),
+				),
+			},
+		},
+	})
+
+	if got, want := f.callLog(), "create,members,disable,enable,update,members,disable"; got != want {
+		t.Errorf("calls = %s, want %s", got, want)
+	}
+	if got := f.snapshot(); got.Name != "after" || strings.Join(got.Users, ",") != "U2" || got.DateDelete == 0 {
+		t.Errorf("remote group = %+v, want renamed, members U2 and disabled", got)
+	}
+}
+
+func TestAccUserGroupResource_DescriptionRemoved(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeUserGroups()
+	client, _ := newUserGroupClient(t, f, userGroupCalls{create: 1, update: 1, disable: 1})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserGroupConfig(`
+	name        = "eng"
+	description = "engineers"`),
+				Check: resource.TestCheckResourceAttr(testUserGroupAddr, "description", "engineers"),
+			},
+			{
+				Config: testAccUserGroupConfig(`name = "eng"`),
+				Check:  resource.TestCheckNoResourceAttr(testUserGroupAddr, "description"),
+			},
+		},
+	})
+
+	if got := f.snapshot(); got.Description != "" {
+		t.Errorf("remote description = %q, want it cleared", got.Description)
+	}
 }
 
 func TestMergeOrder(t *testing.T) {
