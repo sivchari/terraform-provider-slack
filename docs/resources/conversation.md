@@ -17,15 +17,17 @@ description: |-
 
 ### Required
 
-- `name` (String)
+- `name` (String) The channel name: lowercase letters, numbers, hyphens and underscores, up to 80 characters. Changing it renames the channel.
 
 ### Optional
 
-- `is_private` (Boolean)
-- `members` (List of String)
-- `purpose` (String)
-- `topic` (String)
+- `action_on_destroy` (String) What destroying the resource does: "archive" (default) archives the channel and "none" leaves it untouched in Slack and only removes it from state. Slack has no API to delete a channel, and unarchiving requires a user token, so archived channels cannot be restored by this provider.
+- `adopt_existing_channel` (Boolean) Whether to manage a channel that already has this name instead of failing with name_taken on create. Archived channels cannot be adopted. After adopting, members (when set) is enforced on the existing channel, so users not listed are removed, and topic and purpose from the configuration overwrite the existing ones.
+- `is_private` (Boolean) Whether the channel is private. Slack has no API to convert a channel between public and private, so changing this on an existing channel is rejected.
+- `members` (List of String) User IDs of the channel members. When set, the channel is made to contain exactly these users: missing users are invited and other users are removed. The bot that owns the provider token is never invited or removed. When unset, membership is not managed.
+- `purpose` (String) The channel purpose. Removing it from the configuration clears the purpose in Slack.
+- `topic` (String) The channel topic. Removing it from the configuration clears the topic in Slack.
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) The Slack channel ID, for example C0123456789.
