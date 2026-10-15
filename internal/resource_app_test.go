@@ -238,6 +238,37 @@ func TestAccAppResourceDeleteAppDeletedRemotely(t *testing.T) {
 	})
 }
 
+// TestAccAppResourceUpdateCallAppNotFound covers an update where the export
+// succeeds but apps.manifest.update itself answers app_not_found.
+func TestAccAppResourceUpdateCallAppNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").Return(
+		nil,
+		&appmanifest.Error{Method: "apps.manifest.update", Code: "app_not_found"},
+	).MinTimes(1)
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config:      testAccAppResourceRenamed(),
+				ExpectError: regexp.MustCompile(`(?is)app\s+not\s+found.*run\s+terraform\s+plan\s+again\s+to\s+recreate`),
+			},
+		},
+	})
+}
+
 // TestAccAppResourceUpdatePermissionsUpdated covers an update whose scope
 // change Slack reports through permissions_updated. The provider only warns,
 // so the apply must still succeed and store the planned values.
@@ -299,18 +330,8 @@ func TestIsAppNotFound_ErrorForms(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "slack error response by pointer",
-			err:  &slack.SlackErrorResponse{Err: "app_not_found"},
-			want: true,
-		},
-		{
 			name: "wrapped slack error response",
 			err:  fmt.Errorf("delete: %w", slack.SlackErrorResponse{Err: "app_not_found"}),
-			want: true,
-		},
-		{
-			name: "plain error with the code",
-			err:  errors.New("app_not_found"),
 			want: true,
 		},
 		{
@@ -321,6 +342,16 @@ func TestIsAppNotFound_ErrorForms(t *testing.T) {
 		{
 			name: "slack error response with another code",
 			err:  slack.SlackErrorResponse{Err: "invalid_auth"},
+			want: false,
+		},
+		{
+			name: "slack error response by pointer",
+			err:  &slack.SlackErrorResponse{Err: "app_not_found"},
+			want: false,
+		},
+		{
+			name: "plain error with the code",
+			err:  errors.New("app_not_found"),
 			want: false,
 		},
 		{
