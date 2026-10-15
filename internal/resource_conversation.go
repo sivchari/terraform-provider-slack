@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"html"
 	"slices"
 	"sort"
 
@@ -60,7 +61,10 @@ func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaReques
 	res.Schema = schema.Schema{
 		MarkdownDescription: "Manages a public or private Slack channel.\n\n" +
 			"Existing channels can be imported with their channel ID. Direct messages\n" +
-			"cannot be imported, because Slack has no API to archive them.",
+			"cannot be imported, because Slack has no API to archive them.\n\n" +
+			"A channel the bot cannot see is removed from state on refresh and, on destroy, is not archived. " +
+			"Both leave a warning. This happens when the bot was removed from a private channel: re-invite " +
+			"the bot and import the channel again.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -94,7 +98,8 @@ func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaReques
 				Validators:  []validator.List{uniqueStrings()},
 				Description: "User IDs of the channel members. When set, the channel is made to contain exactly these users: " +
 					"missing users are invited and other users are removed. The bot that owns the provider token is never " +
-					"invited or removed. Elements must be unique. When unset, membership is not managed.",
+					"invited or removed. Elements must be unique. When unset, membership is not managed. " +
+					"Import leaves members unset: add members to the configuration afterwards to start managing membership.",
 			},
 			"action_on_destroy": schema.StringAttribute{
 				Optional: true,
@@ -155,32 +160,15 @@ func (r *ResourceConversation) ImportState(ctx context.Context, req resource.Imp
 		return
 	}
 
-	botID, err := r.botUserID(ctx)
-	if err != nil {
-		res.Diagnostics.AddError("failed to identify the bot user", err.Error())
-		return
-	}
-	users, err := allConversationMembers(ctx, r.client, id)
-	if err != nil {
-		res.Diagnostics.AddError(
-			fmt.Sprintf("failed to get users in conversation with the id %s", id),
-			err.Error(),
-		)
-		return
-	}
-	memberList, diags := types.ListValueFrom(ctx, types.StringType, mergeMemberOrder(nil, users, botID))
-	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
-
+	// members stays null: an unset members means membership is unmanaged, and
+	// the configuration written after an import usually omits it.
 	state := ResourceConversationState{
 		ID:                   types.StringValue(channel.ID),
 		Name:                 types.StringValue(channel.Name),
 		Topic:                remoteString(types.StringNull(), channel.Topic.Value),
 		Purpose:              remoteString(types.StringNull(), channel.Purpose.Value),
 		IsPrivate:            types.BoolValue(channel.IsPrivate),
-		Members:              memberList,
+		Members:              types.ListNull(types.StringType),
 		ActionOnDestroy:      types.StringValue(actionOnDestroyArchive),
 		AdoptExistingChannel: types.BoolValue(false),
 	}
@@ -253,10 +241,11 @@ func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRe
 // textUpdate returns the topic or purpose to send to Slack and whether to send
 // it. A new channel only needs it when configured. An adopted channel already
 // holds text, so the configuration, an unset one meaning "", overwrites it
-// whenever the two differ.
+// whenever the two differ. current is compared unescaped, as Slack returns it
+// HTML-escaped.
 func textUpdate(plan types.String, current string, adopted bool) (text string, send bool) {
 	if adopted {
-		return plan.ValueString(), plan.ValueString() != current
+		return plan.ValueString(), plan.ValueString() != html.UnescapeString(current)
 	}
 	return plan.ValueString(), !plan.IsNull()
 }
@@ -368,6 +357,11 @@ func (r *ResourceConversation) Read(ctx context.Context, req resource.ReadReques
 	})
 	if err != nil {
 		if isSlackError(err, "channel_not_found") {
+			res.Diagnostics.AddWarning(
+				"Channel not found",
+				fmt.Sprintf("The channel %s was not visible to the bot, so it was removed from state. The bot may have "+
+					"been removed from a private channel: re-invite the bot and import the channel again.", state.ID.ValueString()),
+			)
 			res.State.RemoveResource(ctx)
 			return
 		}
@@ -422,9 +416,21 @@ func (r *ResourceConversation) Update(ctx context.Context, req resource.UpdateRe
 	}
 	id := state.ID.ValueString()
 
+	// Each finished step is saved before the next call, so a failure leaves the
+	// steps already applied in Slack recorded in state.
+	saved := state
+	save := func() bool {
+		res.Diagnostics.Append(res.State.Set(ctx, &saved)...)
+		return !res.Diagnostics.HasError()
+	}
+
 	if !plan.Name.Equal(state.Name) {
 		if _, err := r.client.RenameConversationContext(ctx, id, plan.Name.ValueString()); err != nil {
 			res.Diagnostics.AddError("failed to rename conversation", err.Error())
+			return
+		}
+		saved.Name = plan.Name
+		if !save() {
 			return
 		}
 	}
@@ -434,11 +440,19 @@ func (r *ResourceConversation) Update(ctx context.Context, req resource.UpdateRe
 			res.Diagnostics.AddError("failed to set topic of conversation", err.Error())
 			return
 		}
+		saved.Topic = plan.Topic
+		if !save() {
+			return
+		}
 	}
 
 	if !plan.Purpose.Equal(state.Purpose) {
 		if _, err := r.client.SetPurposeOfConversationContext(ctx, id, plan.Purpose.ValueString()); err != nil {
 			res.Diagnostics.AddError("failed to set purpose of conversation", err.Error())
+			return
+		}
+		saved.Purpose = plan.Purpose
+		if !save() {
 			return
 		}
 	}
@@ -451,6 +465,10 @@ func (r *ResourceConversation) Update(ctx context.Context, req resource.UpdateRe
 		}
 		if err := r.syncMembers(ctx, id, plan.Members, current); err != nil {
 			res.Diagnostics.AddError("failed to set members of conversation", err.Error())
+			return
+		}
+		saved.Members = plan.Members
+		if !save() {
 			return
 		}
 	}
@@ -471,7 +489,15 @@ func (r *ResourceConversation) Delete(ctx context.Context, req resource.DeleteRe
 	}
 
 	err := r.client.ArchiveConversationContext(ctx, state.ID.ValueString())
-	if err != nil && !isSlackError(err, "already_archived") && !isSlackError(err, "channel_not_found") {
+	switch {
+	case err == nil, isSlackError(err, "already_archived"):
+	case isSlackError(err, "channel_not_found"):
+		res.Diagnostics.AddWarning(
+			"Channel not found during destroy",
+			fmt.Sprintf("The channel %s was not visible to the bot, so it was removed from state without being archived. "+
+				"This happens when the bot was removed from a private channel.", state.ID.ValueString()),
+		)
+	default:
 		res.Diagnostics.AddError("failed to archive conversation", err.Error())
 	}
 }
@@ -510,9 +536,14 @@ func (r *ResourceConversation) botUserID(ctx context.Context) (string, error) {
 	return resp.UserID, nil
 }
 
-// remoteString converts a topic or purpose read from Slack to state, keeping
-// a null prior value null when Slack holds the empty string.
+// remoteString converts a text field read from Slack (a topic, a purpose or a
+// similar field such as a usergroup description) to state, keeping a null prior
+// value null when Slack holds the empty string.
+//
+// Slack returns & < > HTML-escaped, so the value is unescaped to match what was
+// configured.
 func remoteString(prior types.String, remote string) types.String {
+	remote = html.UnescapeString(remote)
 	if prior.IsNull() && remote == "" {
 		return prior
 	}
