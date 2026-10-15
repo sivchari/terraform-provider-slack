@@ -48,6 +48,36 @@ func (uniqueStringsValidator) ValidateList(_ context.Context, req validator.List
 	}
 }
 
+// nonEmptyList rejects a list without elements, which Slack cannot apply as a
+// member list; omitting the attribute leaves membership unmanaged instead.
+func nonEmptyList() validator.List {
+	return nonEmptyListValidator{}
+}
+
+type nonEmptyListValidator struct{}
+
+func (nonEmptyListValidator) Description(context.Context) string {
+	return "list must not be empty"
+}
+
+func (v nonEmptyListValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (nonEmptyListValidator) ValidateList(_ context.Context, req validator.ListRequest, resp *validator.ListResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if len(req.ConfigValue.Elements()) > 0 {
+		return
+	}
+	resp.Diagnostics.AddAttributeError(
+		req.Path,
+		"Empty list",
+		fmt.Sprintf("Omit %s to leave membership unmanaged. Slack cannot apply an empty member list.", req.Path),
+	)
+}
+
 // oneOfString rejects string values other than the allowed ones.
 func oneOfString(allowed ...string) validator.String {
 	return oneOfStringValidator{allowed: allowed}

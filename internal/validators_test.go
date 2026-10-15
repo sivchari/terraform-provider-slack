@@ -84,3 +84,33 @@ func TestOneOfString_ValidateString(t *testing.T) {
 		})
 	}
 }
+
+func TestNonEmptyList_ValidateList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   types.List
+		wantErr bool
+	}{
+		{name: "one element", value: types.ListValueMust(types.StringType, []attr.Value{types.StringValue("U1")})},
+		{name: "unknown element", value: types.ListValueMust(types.StringType, []attr.Value{types.StringUnknown()})},
+		{name: "null list is skipped", value: types.ListNull(types.StringType)},
+		{name: "unknown list is skipped", value: types.ListUnknown(types.StringType)},
+		{name: "empty list is rejected", value: types.ListValueMust(types.StringType, nil), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := validator.ListRequest{Path: path.Root("users"), ConfigValue: tt.value}
+			var resp validator.ListResponse
+			nonEmptyList().ValidateList(context.Background(), req, &resp)
+
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Errorf("HasError() = %v, want %v (diagnostics: %v)", got, tt.wantErr, resp.Diagnostics)
+			}
+		})
+	}
+}
