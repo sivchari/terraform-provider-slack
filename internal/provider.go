@@ -23,7 +23,9 @@ import (
 var _ provider.Provider = &SlackProvider{}
 
 type APIClient interface {
+	// Users
 	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	// User Groups
 	CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup) (slack.UserGroup, error)
 	GetUserGroupsContext(ctx context.Context, opts ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
@@ -38,9 +40,13 @@ type APIClient interface {
 	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
 	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
 	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slack.Channel, error)
+	JoinConversationContext(ctx context.Context, channelID string) (*slack.Channel, string, []string, error)
 	KickUserFromConversationContext(ctx context.Context, channelID string, user string) error
 	ArchiveConversationContext(ctx context.Context, channelID string) error
-	CloseConversationContext(ctx context.Context, channelID string) (noOp bool, alreadyClosed bool, err error)
+	RenameConversationContext(ctx context.Context, channelID, channelName string) (*slack.Channel, error)
+	GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
+	// Auth
+	AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error)
 	// App Manifests
 	CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error)
 	UpdateAppManifest(ctx context.Context, manifest appmanifest.Document, token, appID string) (*slack.UpdateManifestResponse, error)

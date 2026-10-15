@@ -15,6 +15,8 @@ import (
 var (
 	_ datasource.DataSource              = &DataSourceUserGroup{}
 	_ datasource.DataSourceWithConfigure = &DataSourceUserGroup{}
+
+	_ datasource.DataSourceWithConfigValidators = &DataSourceUserGroup{}
 )
 
 type DataSourceUserGroup struct {
@@ -28,6 +30,7 @@ type DataSourceUserGroupState struct {
 	Name        types.String              `tfsdk:"name"`
 	Description types.String              `tfsdk:"description"`
 	Handle      types.String              `tfsdk:"handle"`
+	Enabled     types.Bool                `tfsdk:"enabled"`
 	IsExternal  types.Bool                `tfsdk:"is_external"`
 	AutoType    types.String              `tfsdk:"auto_type"`
 	CreatedBy   types.String              `tfsdk:"created_by"`
@@ -53,62 +56,91 @@ func (d *DataSourceUserGroup) Metadata(_ context.Context, req datasource.Metadat
 
 func (d *DataSourceUserGroup) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
+		Description: "Looks up a Slack user group by ID, name or handle. Exactly one of id, name or handle must be set. " +
+			"Disabled user groups are found too; check enabled.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Required: true,
-			},
-			"team_id": schema.StringAttribute{
-				Computed: true,
-			},
-			"is_user_group": schema.BoolAttribute{
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "ID of the user group, for example S0123456789. Conflicts with name and handle.",
 			},
 			"name": schema.StringAttribute{
-				Computed: true,
-			},
-			"description": schema.StringAttribute{
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "Name of the user group. Conflicts with id and handle.",
 			},
 			"handle": schema.StringAttribute{
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "Handle of the user group, the part after the @ used to mention it. Conflicts with id and name.",
+			},
+			"enabled": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether the user group is enabled. A disabled group has a deletion date.",
+			},
+			"team_id": schema.StringAttribute{
+				Computed:    true,
+				Description: "ID of the workspace the user group belongs to.",
+			},
+			"is_user_group": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether the object is a user group.",
+			},
+			"description": schema.StringAttribute{
+				Computed:    true,
+				Description: "Description of the user group.",
 			},
 			"is_external": schema.BoolAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Whether the user group is shared from another workspace.",
 			},
 			"auto_type": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Kind of automatic user group, such as admin or owner. Empty for a custom user group.",
 			},
 			"created_by": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ID of the user who created the user group.",
 			},
 			"updated_by": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ID of the user who last updated the user group.",
 			},
 			"deleted_by": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ID of the user who disabled the user group. Empty while it is enabled.",
 			},
 			"prefs": schema.SingleNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Default channels and groups the members of the user group are added to.",
 				Attributes: map[string]schema.Attribute{
 					"channels": schema.ListAttribute{
 						ElementType: types.StringType,
 						Computed:    true,
+						Description: "IDs of the channels every member of the user group joins.",
 					},
 					"groups": schema.ListAttribute{
 						ElementType: types.StringType,
 						Computed:    true,
+						Description: "IDs of the private channels every member of the user group joins.",
 					},
 				},
 			},
 			"user_count": schema.NumberAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Number of users in the user group.",
 			},
 			"users": schema.ListAttribute{
 				ElementType: types.StringType,
 				Computed:    true,
+				Description: "IDs of the users in the user group.",
 			},
 		},
 	}
+}
+
+func (d *DataSourceUserGroup) ConfigValidators(context.Context) []datasource.ConfigValidator {
+	return []datasource.ConfigValidator{exactlyOneOf("id", "name", "handle")}
 }
 
 func (d *DataSourceUserGroup) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
@@ -139,24 +171,17 @@ func (d *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadReque
 		slack.GetUserGroupsOptionIncludeDisabled(true),
 	)
 	if err != nil {
-		res.Diagnostics.AddError(
-			fmt.Sprintf("the usergroup that has the id %s does not exist", state.TeamID.String()),
-			err.Error(),
-		)
+		res.Diagnostics.AddError("Failed to list the Slack user groups", err.Error())
+		return
 	}
-	var userGroup slack.UserGroup
-	for _, ug := range userGroups {
-		if ug.ID == state.ID.ValueString() {
-			userGroup = ug
-			break
-		}
-	}
-
-	if userGroup.ID == "" {
+	key, value, field := userGroupLookup(state)
+	userGroup, found := matchUserGroup(userGroups, value, field)
+	if !found {
 		res.Diagnostics.AddError(
-			fmt.Sprintf("the usergroup that has the id %s does not exist", state.ID.String()),
-			"",
+			"Usergroup not found",
+			fmt.Sprintf("No user group has the %s %q.", key, value),
 		)
+		return
 	}
 
 	channels := make([]attr.Value, 0, len(userGroup.Prefs.Channels))
@@ -196,6 +221,7 @@ func (d *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadReque
 		Name:        types.StringValue(userGroup.Name),
 		Description: types.StringValue(userGroup.Description),
 		Handle:      types.StringValue(userGroup.Handle),
+		Enabled:     types.BoolValue(userGroup.DateDelete == 0),
 		IsExternal:  types.BoolValue(userGroup.IsExternal),
 		AutoType:    types.StringValue(userGroup.AutoType),
 		CreatedBy:   types.StringValue(userGroup.CreatedBy),
@@ -210,4 +236,39 @@ func (d *DataSourceUserGroup) Read(ctx context.Context, req datasource.ReadReque
 	}
 	diags = res.State.Set(ctx, &state)
 	res.Diagnostics.Append(diags...)
+}
+
+// userGroupLookup returns the lookup key set in the configuration, its value
+// and the user group field it is compared with.
+func userGroupLookup(state DataSourceUserGroupState) (key, value string, field func(slack.UserGroup) string) {
+	switch {
+	case !state.ID.IsNull():
+		return "id", state.ID.ValueString(), func(ug slack.UserGroup) string { return ug.ID }
+	case !state.Name.IsNull():
+		return "name", state.Name.ValueString(), func(ug slack.UserGroup) string { return ug.Name }
+	default:
+		return "handle", state.Handle.ValueString(), func(ug slack.UserGroup) string { return ug.Handle }
+	}
+}
+
+// matchUserGroup returns the user group whose field equals value, preferring an
+// enabled one because a disabled group may keep a name or handle that was
+// reused later.
+func matchUserGroup(userGroups []slack.UserGroup, value string, field func(slack.UserGroup) string) (slack.UserGroup, bool) {
+	var disabled *slack.UserGroup
+	for i := range userGroups {
+		if field(userGroups[i]) != value {
+			continue
+		}
+		if userGroups[i].DateDelete == 0 {
+			return userGroups[i], true
+		}
+		if disabled == nil {
+			disabled = &userGroups[i]
+		}
+	}
+	if disabled != nil {
+		return *disabled, true
+	}
+	return slack.UserGroup{}, false
 }
