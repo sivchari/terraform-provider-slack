@@ -3,12 +3,20 @@
 page_title: "slack_usergroup Resource - terraform-provider-slack"
 subcategory: ""
 description: |-
-  
+  Manages a Slack user group. Slack has no API to delete a user group, so destroying this resource disables the group, and creating a group with the name or handle of a disabled one may fail with name_already_exists or handle_already_exists. Slack rejects an empty member list (no_users_provided), so users cannot be []: set enabled = false to retire the group or omit users to stop managing its members.
+
+  team_id is sent when the group is created and whenever it is read, but the usergroups.enable, usergroups.disable, usergroups.update and usergroups.users.update calls this provider makes do not carry it, so org-level (Enterprise Grid) tokens are not supported for updating a group.
+
+  A group is imported by <usergroup_id> or <team_id>/<usergroup_id>; the second form sends the team ID to usergroups.list and stores it in team_id.
 ---
 
 # slack_usergroup (Resource)
 
+Manages a Slack user group. Slack has no API to delete a user group, so destroying this resource disables the group, and creating a group with the name or handle of a disabled one may fail with `name_already_exists` or `handle_already_exists`. Slack rejects an empty member list (`no_users_provided`), so `users` cannot be `[]`: set `enabled = false` to retire the group or omit `users` to stop managing its members.
 
+`team_id` is sent when the group is created and whenever it is read, but the `usergroups.enable`, `usergroups.disable`, `usergroups.update` and `usergroups.users.update` calls this provider makes do not carry it, so org-level (Enterprise Grid) tokens are not supported for updating a group.
+
+A group is imported by `<usergroup_id>` or `<team_id>/<usergroup_id>`; the second form sends the team ID to `usergroups.list` and stores it in `team_id`.
 
 
 
@@ -17,17 +25,17 @@ description: |-
 
 ### Required
 
-- `name` (String)
+- `name` (String) The display name of the user group. Must be unique in the workspace.
 
 ### Optional
 
-- `channels` (List of String)
-- `description` (String)
-- `enabled` (Boolean)
-- `handle` (String)
-- `team_id` (String)
-- `users` (List of String)
+- `channels` (List of String) IDs of the default channels members of the group are added to. Replaces Slack's default channels entirely.
+- `description` (String) A short description of the group. Removing it from the configuration clears it in Slack.
+- `enabled` (Boolean) Whether the group is enabled. Setting this to false disables the group; Slack cannot delete it.
+- `handle` (String) The mention handle of the group, unique across users, channels and user groups. Slack generates one from the name when omitted.
+- `team_id` (String) The ID of the workspace the group belongs to. Sent when the group is created and read, but not on updates, so org-level (Enterprise Grid) tokens cannot update the group. Changing it replaces the group.
+- `users` (List of String) IDs of the members of the group. Replaces the whole member list; leave it unset to leave membership unmanaged. Guests and bots cannot be members.
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) The ID of the user group, for example S0123456789.
