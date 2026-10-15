@@ -413,13 +413,9 @@ func (r *ResourceApp) Read(ctx context.Context, req resource.ReadRequest, res *r
 
 const errCodeAppNotFound = "app_not_found"
 
-// isAppNotFound reports whether err is Slack's app_not_found, returned by
-// apps.manifest.export and apps.manifest.delete when the app does not exist
-// or has been deleted.
-//
-// The export goes through the provider's raw HTTP client and yields
-// *appmanifest.Error, while the delete goes through slack-go, which returns
-// slack.SlackErrorResponse whose message is the bare error code.
+// isAppNotFound reports whether err is Slack's app_not_found. Export goes
+// through the provider's HTTP client and delete through slack-go, so the code
+// arrives as *appmanifest.Error or slack.SlackErrorResponse respectively.
 func isAppNotFound(err error) bool {
 	var apiErr *appmanifest.Error
 	if errors.As(err, &apiErr) {
@@ -429,11 +425,20 @@ func isAppNotFound(err error) bool {
 	if errors.As(err, &slackErr) {
 		return slackErr.Err == errCodeAppNotFound
 	}
-	var slackErrPtr *slack.SlackErrorResponse
-	if errors.As(err, &slackErrPtr) {
-		return slackErrPtr.Err == errCodeAppNotFound
-	}
-	return err != nil && err.Error() == errCodeAppNotFound
+	return false
+}
+
+// addAppNotFoundError reports that Slack no longer knows the app while the
+// provider was doing during.
+func addAppNotFoundError(diags *diag.Diagnostics, appID, during string) {
+	diags.AddError(
+		"app not found",
+		fmt.Sprintf(
+			"Slack returned app_not_found for app %s while %s; "+
+				"the app may have been deleted outside Terraform. Run terraform plan again to recreate it.",
+			appID, during,
+		),
+	)
 }
 
 func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
@@ -493,6 +498,10 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	updated, err := r.client.UpdateAppManifest(ctx, merged, "", state.ID.ValueString())
 	if err != nil {
+		if isAppNotFound(err) {
+			addAppNotFoundError(&res.Diagnostics, state.ID.ValueString(), "updating it")
+			return
+		}
 		res.Diagnostics.AddError("failed to update app", err.Error())
 		return
 	}
@@ -500,9 +509,9 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 		res.Diagnostics.AddWarning(
 			"App permissions changed",
 			fmt.Sprintf(
-				"The OAuth scopes of app %s changed. The app must be reinstalled in each workspace "+
+				"The OAuth scopes of app %s (%s) changed. The app must be reinstalled in each workspace "+
 					"before the new scopes take effect.",
-				state.ID.ValueString(),
+				plan.DisplayInformation.Name.ValueString(), state.ID.ValueString(),
 			),
 		)
 	}
@@ -520,9 +529,20 @@ func (r *ResourceApp) Delete(ctx context.Context, req resource.DeleteRequest, re
 		return
 	}
 
-	if _, err := r.client.DeleteManifestContext(ctx, "", state.ID.ValueString()); err != nil && !isAppNotFound(err) {
+	if _, err := r.client.DeleteManifestContext(ctx, "", state.ID.ValueString()); err != nil {
+		if isAppNotFound(err) {
+			res.Diagnostics.AddWarning(
+				"App not found during destroy",
+				fmt.Sprintf(
+					"Slack did not find app %s through apps.manifest.delete, so it was removed from state "+
+						"without being deleted. This also happens when the configuration token cannot see the app "+
+						"(different owner or workspace).",
+					state.ID.ValueString(),
+				),
+			)
+			return
+		}
 		res.Diagnostics.AddError("failed to delete app", err.Error())
-		return
 	}
 }
 
