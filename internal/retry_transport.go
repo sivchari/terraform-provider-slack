@@ -1,13 +1,14 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 const (
@@ -15,6 +16,10 @@ const (
 	// Tier 1 methods such as apps.manifest.* legitimately ask for a full minute.
 	defaultMaxWait    = 60 * time.Second
 	defaultRetryAfter = time.Second
+	// minRetryAfter keeps "Retry-After: 0" from producing back-to-back retries.
+	minRetryAfter = time.Second
+	// maxDrainBytes bounds how much of a 429 body is read to free the connection.
+	maxDrainBytes = 64 << 10
 )
 
 // retryTransport replays requests that Slack answers with HTTP 429, waiting
@@ -22,7 +27,9 @@ const (
 //
 // Only 429 responses are retried: Slack guides clients to Retry-After alone,
 // and a transport error says nothing about whether a non-idempotent call
-// already took effect.
+// already took effect. A 429 is returned as is when the wait exceeds maxWait or
+// the request deadline, or when the request body cannot be re-created
+// (GetBody is nil), so streamed uploads are never buffered.
 type retryTransport struct {
 	base       http.RoundTripper
 	maxRetries int
@@ -45,13 +52,12 @@ func newRetryTransport(base http.RoundTripper) *retryTransport {
 	}
 }
 
-// RoundTrip implements http.RoundTripper. Once retries are exhausted the last
-// 429 response is returned unchanged so callers still see the rate limit.
+// RoundTrip implements http.RoundTripper. When a 429 is not retried, or
+// retries are exhausted, it is returned unchanged so callers still see the
+// rate limit.
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req, err := replayable(req)
-	if err != nil {
-		return nil, err
-	}
+	ctx := req.Context()
+	canRetry := replayable(req)
 
 	for attempt := 0; ; attempt++ {
 		attemptReq := req
@@ -60,58 +66,68 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if err != nil {
 				return nil, fmt.Errorf("rewind request body: %w", err)
 			}
-			attemptReq = req.Clone(req.Context())
+			attemptReq = req.Clone(ctx)
 			attemptReq.Body = body
 		}
 
 		resp, err := t.base.RoundTrip(attemptReq)
-		if err != nil || resp.StatusCode != http.StatusTooManyRequests || attempt >= t.maxRetries {
+		if err != nil || resp.StatusCode != http.StatusTooManyRequests || attempt >= t.maxRetries || !canRetry {
 			return resp, err
 		}
 
-		wait := t.retryAfter(resp)
+		wait, ok := t.retryAfter(resp)
+		if !ok || exceedsDeadline(ctx, wait) {
+			return resp, nil
+		}
+
 		// Draining lets the connection be reused for the retry.
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 		resp.Body.Close()
 
-		if err := t.sleep(req.Context(), wait); err != nil {
-			return nil, err
+		tflog.Warn(ctx, "Slack rate limited, waiting before retry", map[string]any{
+			"wait":    wait.String(),
+			"attempt": attempt + 1,
+			"url":     req.URL.Path,
+		})
+
+		if err := t.sleep(ctx, wait); err != nil {
+			return nil, fmt.Errorf("waiting %s for Slack rate limit to clear: %w", wait, err)
 		}
 	}
 }
 
-// retryAfter reads the Retry-After header (integer seconds), falling back to
-// defaultRetryAfter when it is missing or invalid, and caps it at maxWait.
-func (t *retryTransport) retryAfter(resp *http.Response) time.Duration {
+// retryAfter returns how long to wait before retrying, read from the
+// Retry-After header as integer seconds or an HTTP-date. It reports false when
+// the wait exceeds maxWait, since the limit will not clear before then.
+func (t *retryTransport) retryAfter(resp *http.Response) (time.Duration, bool) {
 	wait := defaultRetryAfter
-	if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds >= 0 {
-		wait = time.Duration(seconds) * time.Second
+
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		if seconds, err := strconv.Atoi(v); err == nil {
+			if seconds >= 0 {
+				wait = time.Duration(seconds) * time.Second
+			}
+		} else if date, err := http.ParseTime(v); err == nil {
+			wait = time.Until(date)
+		}
 	}
 
-	return min(wait, t.maxWait)
+	wait = max(wait, minRetryAfter)
+
+	return wait, wait <= t.maxWait
 }
 
-// replayable returns req itself when its body can be re-created, and
-// otherwise a copy whose body is buffered in memory. Slack API bodies are
-// small form posts, so buffering is cheap.
-func replayable(req *http.Request) (*http.Request, error) {
-	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
-		return req, nil
-	}
+// exceedsDeadline reports whether wait would run past the deadline of ctx.
+func exceedsDeadline(ctx context.Context, wait time.Duration) bool {
+	deadline, ok := ctx.Deadline()
 
-	buf, err := io.ReadAll(req.Body)
-	req.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("buffer request body: %w", err)
-	}
+	return ok && wait > time.Until(deadline)
+}
 
-	clone := req.Clone(req.Context())
-	clone.Body = io.NopCloser(bytes.NewReader(buf))
-	clone.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(buf)), nil
-	}
-
-	return clone, nil
+// replayable reports whether req can be sent again: it has no body, or its
+// body can be re-created through GetBody.
+func replayable(req *http.Request) bool {
+	return req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
