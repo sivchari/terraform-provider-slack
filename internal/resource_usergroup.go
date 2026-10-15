@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
 )
@@ -50,8 +51,13 @@ func (r *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, 
 		MarkdownDescription: "Manages a Slack user group. Slack has no API to delete a user group, so destroying " +
 			"this resource disables the group, and creating a group with the name or handle of a disabled one " +
 			"may fail with `name_already_exists` or `handle_already_exists`. Slack rejects an empty member list " +
-			"(`no_users_provided`), so `users` cannot be changed to `[]`: set `enabled = false` to retire the " +
-			"group or omit `users` to stop managing its members.",
+			"(`no_users_provided`), so `users` cannot be `[]`: set `enabled = false` to retire the " +
+			"group or omit `users` to stop managing its members.\n\n" +
+			"`team_id` is sent when the group is created and whenever it is read, but the `usergroups.enable`, " +
+			"`usergroups.disable`, `usergroups.update` and `usergroups.users.update` calls this provider makes do " +
+			"not carry it, so org-level (Enterprise Grid) tokens are not supported for updating a group.\n\n" +
+			"A group is imported by `<usergroup_id>` or `<team_id>/<usergroup_id>`; the second form sends the " +
+			"team ID to `usergroups.list` and stores it in `team_id`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -66,18 +72,18 @@ func (r *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, 
 				ElementType: types.StringType,
 				Optional:    true,
 				Description: "IDs of the default channels members of the group are added to. Replaces Slack's default channels entirely.",
+				Validators:  []validator.List{uniqueStrings()},
 			},
 			"users": schema.ListAttribute{
 				ElementType: types.StringType,
 				Optional:    true,
 				Description: "IDs of the members of the group. Replaces the whole member list; leave it unset to leave " +
 					"membership unmanaged. Guests and bots cannot be members.",
+				Validators: []validator.List{uniqueStrings(), nonEmptyList()},
 			},
 			"description": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "A short description of the group. Slack reports an empty string when none is set.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Optional:    true,
+				Description: "A short description of the group. Removing it from the configuration clears it in Slack.",
 			},
 			"handle": schema.StringAttribute{
 				Optional: true,
@@ -89,8 +95,9 @@ func (r *ResourceUserGroup) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"team_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				Description: "The ID of the workspace the group belongs to. Only required for org-level (Enterprise Grid) " +
-					"tokens. Changing it replaces the group.",
+				Description: "The ID of the workspace the group belongs to. Sent when the group is created and read, " +
+					"but not on updates, so org-level (Enterprise Grid) tokens cannot update the group. " +
+					"Changing it replaces the group.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplaceIfConfigured(),
@@ -122,13 +129,19 @@ func (r *ResourceUserGroup) Configure(_ context.Context, req resource.ConfigureR
 }
 
 func (r *ResourceUserGroup) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
-	ug, found, err := r.findUserGroup(ctx, req.ID, "")
+	teamID, id, err := parseUserGroupImportID(req.ID)
+	if err != nil {
+		res.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+
+	ug, found, err := r.findUserGroup(ctx, id, teamID)
 	if err != nil {
 		res.Diagnostics.AddError("failed to list user groups", err.Error())
 		return
 	}
 	if !found {
-		res.Diagnostics.AddError(fmt.Sprintf("the usergroup that has the id %s does not exist", req.ID), "")
+		res.Diagnostics.AddError(fmt.Sprintf("the usergroup that has the id %s does not exist", id), "")
 		return
 	}
 
@@ -137,7 +150,23 @@ func (r *ResourceUserGroup) ImportState(ctx context.Context, req resource.Import
 	if res.Diagnostics.HasError() {
 		return
 	}
+	if teamID != "" {
+		state.TeamID = types.StringValue(teamID)
+	}
 	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
+}
+
+// parseUserGroupImportID splits an import ID of the form <usergroup_id> or
+// <team_id>/<usergroup_id>. teamID is empty for the first form.
+func parseUserGroupImportID(importID string) (teamID, id string, err error) {
+	teamID, id, hasTeam := strings.Cut(importID, "/")
+	if !hasTeam {
+		teamID, id = "", importID
+	}
+	if id == "" || (hasTeam && teamID == "") || strings.Contains(id, "/") {
+		return "", "", fmt.Errorf("expected <usergroup_id> or <team_id>/<usergroup_id>, got %q", importID)
+	}
+	return teamID, id, nil
 }
 
 func (r *ResourceUserGroup) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
@@ -168,12 +197,14 @@ func (r *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	// The state is saved before the follow-up calls so a failure leaves the
-	// group tracked (tainted) instead of orphaned in Slack.
+	// group tracked (tainted) instead of orphaned in Slack. It records the
+	// group as enabled, which is what Slack holds until the disable succeeds,
+	// so a later destroy still disables it.
 	state := plan
 	state.ID = types.StringValue(ug.ID)
 	state.Handle = knownOr(plan.Handle, ug.Handle)
-	state.Description = knownOr(plan.Description, ug.Description)
 	state.TeamID = knownOr(plan.TeamID, ug.TeamID)
+	state.Enabled = types.BoolValue(true)
 	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
 	if res.Diagnostics.HasError() {
 		return
@@ -190,6 +221,8 @@ func (r *ResourceUserGroup) Create(ctx context.Context, req resource.CreateReque
 			res.Diagnostics.AddError("failed to disable user group", err.Error())
 			return
 		}
+		state.Enabled = plan.Enabled
+		res.Diagnostics.Append(res.State.Set(ctx, &state)...)
 	}
 }
 
@@ -227,8 +260,6 @@ func (r *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	id := prior.ID.ValueString()
-	enable := plan.Enabled.ValueBool() && !prior.Enabled.ValueBool()
-	disable := !plan.Enabled.ValueBool() && prior.Enabled.ValueBool()
 
 	channels, diags := stringsFromList(ctx, plan.Channels)
 	res.Diagnostics.Append(diags...)
@@ -246,8 +277,33 @@ func (r *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
+	var opts []slack.UpdateUserGroupsOption
+	if !plan.Name.Equal(prior.Name) {
+		opts = append(opts, slack.UpdateUserGroupsOptionName(plan.Name.ValueString()))
+	}
+	if !plan.Handle.IsUnknown() && !plan.Handle.Equal(prior.Handle) {
+		opts = append(opts, slack.UpdateUserGroupsOptionHandle(plan.Handle.ValueString()))
+	}
+	// Removing the description from the configuration sends the empty string,
+	// which is how Slack clears it.
+	if !plan.Description.Equal(prior.Description) {
+		description := plan.Description.ValueString()
+		opts = append(opts, slack.UpdateUserGroupsOptionDescription(&description))
+	}
+	if !plan.Channels.Equal(prior.Channels) {
+		if channels == nil {
+			channels = []string{}
+		}
+		opts = append(opts, slack.UpdateUserGroupsOptionChannels(channels))
+	}
+
 	// A disabled group may not accept edits, so it is enabled before and
-	// disabled after everything else.
+	// disabled after everything else, including when it stays disabled.
+	edits := len(opts) > 0 || updateUsers
+	reenable := !prior.Enabled.ValueBool() && !plan.Enabled.ValueBool() && edits
+	enable := (plan.Enabled.ValueBool() && !prior.Enabled.ValueBool()) || reenable
+	disable := (!plan.Enabled.ValueBool() && prior.Enabled.ValueBool()) || reenable
+
 	if enable {
 		if _, err := r.client.EnableUserGroupContext(ctx, id); err != nil {
 			res.Diagnostics.AddError("failed to enable user group", err.Error())
@@ -256,25 +312,8 @@ func (r *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	current := slack.UserGroup{
-		Handle:      prior.Handle.ValueString(),
-		Description: prior.Description.ValueString(),
-		TeamID:      prior.TeamID.ValueString(),
-	}
-	var opts []slack.UpdateUserGroupsOption
-	if !plan.Name.Equal(prior.Name) {
-		opts = append(opts, slack.UpdateUserGroupsOptionName(plan.Name.ValueString()))
-	}
-	if !plan.Handle.IsUnknown() && !plan.Handle.Equal(prior.Handle) {
-		opts = append(opts, slack.UpdateUserGroupsOptionHandle(plan.Handle.ValueString()))
-	}
-	if !plan.Description.IsUnknown() && !plan.Description.Equal(prior.Description) {
-		opts = append(opts, slack.UpdateUserGroupsOptionDescription(plan.Description.ValueStringPointer()))
-	}
-	if !plan.Channels.Equal(prior.Channels) {
-		if channels == nil {
-			channels = []string{}
-		}
-		opts = append(opts, slack.UpdateUserGroupsOptionChannels(channels))
+		Handle: prior.Handle.ValueString(),
+		TeamID: prior.TeamID.ValueString(),
 	}
 	if len(opts) > 0 {
 		updated, err := r.client.UpdateUserGroupContext(ctx, id, opts...)
@@ -302,7 +341,6 @@ func (r *ResourceUserGroup) Update(ctx context.Context, req resource.UpdateReque
 	state := plan
 	state.ID = prior.ID
 	state.Handle = knownOr(plan.Handle, current.Handle)
-	state.Description = knownOr(plan.Description, current.Description)
 	state.TeamID = knownOr(plan.TeamID, current.TeamID)
 	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
 }
@@ -368,7 +406,7 @@ func userGroupToState(ctx context.Context, ug slack.UserGroup, prior ResourceUse
 		Name:        types.StringValue(ug.Name),
 		Channels:    channels,
 		Users:       users,
-		Description: types.StringValue(ug.Description),
+		Description: remoteString(prior.Description, ug.Description),
 		Handle:      types.StringValue(ug.Handle),
 		TeamID:      types.StringValue(ug.TeamID),
 		Enabled:     types.BoolValue(ug.DateDelete == 0),
