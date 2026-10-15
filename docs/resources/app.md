@@ -16,6 +16,13 @@ description: |-
   model (for example features.unfurl_domains, functions or
   settings.token_rotation_enabled) are kept as they are. Such fields
   cannot be changed or removed through Terraform.
+  Destroying the resource permanently deletes the app through
+  apps.manifest.delete and succeeds if the app is already gone. When an
+  update changes the OAuth scopes, the app must be reinstalled in each
+  workspace before the new scopes take effect, and the provider warns
+  about it. Slack validates the manifest on create and update, not at
+  plan time, because a plan may run with a read-only proxy that cannot
+  call the write-scoped apps.manifest.validate.
 ---
 
 # slack_app (Resource)
@@ -35,6 +42,14 @@ only overlays the fields in this schema, so manifest fields it does not
 model (for example `features.unfurl_domains`, `functions` or
 `settings.token_rotation_enabled`) are kept as they are. Such fields
 cannot be changed or removed through Terraform.
+
+Destroying the resource permanently deletes the app through
+`apps.manifest.delete` and succeeds if the app is already gone. When an
+update changes the OAuth scopes, the app must be reinstalled in each
+workspace before the new scopes take effect, and the provider warns
+about it. Slack validates the manifest on create and update, not at
+plan time, because a plan may run with a read-only proxy that cannot
+call the write-scoped `apps.manifest.validate`.
 
 
 
