@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -388,16 +390,37 @@ func TestClientExportAppManifest_NotFound(t *testing.T) {
 }
 
 // rateLimitOnce answers the first request with 429 (Retry-After: 0, so the
-// retry does not wait) and every later one with body, counting requests.
+// retry waits only the minimum) and every later one with body, counting
+// requests. It fails the test unless the retry repeats the first request's
+// method and non-empty body.
 func rateLimitOnce(t *testing.T, body string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var (
+		requests atomic.Int32
+		mu       sync.Mutex
+		first    struct{ method, body string }
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
 		if requests.Add(1) == 1 {
+			first.method, first.body = r.Method, string(got)
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
+		}
+		if len(got) == 0 {
+			t.Error("retried request body is empty")
+		}
+		if r.Method != first.method || string(got) != first.body {
+			t.Errorf("retried request = %s %q, want %s %q", r.Method, got, first.method, first.body)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
