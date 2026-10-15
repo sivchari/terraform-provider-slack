@@ -242,6 +242,21 @@ func (mr *MockAPIClientMockRecorder) GetUserGroupsContext(ctx any, opts ...any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserGroupsContext", reflect.TypeOf((*MockAPIClient)(nil).GetUserGroupsContext), varargs...)
 }
 
+// GetUserInfoContext mocks base method.
+func (m *MockAPIClient) GetUserInfoContext(ctx context.Context, user string) (*slack.User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserInfoContext", ctx, user)
+	ret0, _ := ret[0].(*slack.User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserInfoContext indicates an expected call of GetUserInfoContext.
+func (mr *MockAPIClientMockRecorder) GetUserInfoContext(ctx, user any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserInfoContext", reflect.TypeOf((*MockAPIClient)(nil).GetUserInfoContext), ctx, user)
+}
+
 // GetUsersInConversationContext mocks base method.
 func (m *MockAPIClient) GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 	m.ctrl.T.Helper()

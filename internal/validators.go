@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -46,6 +48,51 @@ func (uniqueStringsValidator) ValidateList(_ context.Context, req validator.List
 		}
 		seen[s.ValueString()] = struct{}{}
 	}
+}
+
+// exactlyOneOf rejects a data source configuration unless exactly one of the
+// named string attributes is set.
+//
+// The check is skipped while any of them is unknown, since it cannot be
+// decided before apply.
+func exactlyOneOf(names ...string) datasource.ConfigValidator {
+	return exactlyOneOfValidator{names: names}
+}
+
+type exactlyOneOfValidator struct {
+	names []string
+}
+
+func (v exactlyOneOfValidator) Description(context.Context) string {
+	return "exactly one of " + strings.Join(v.names, ", ") + " must be set"
+}
+
+func (v exactlyOneOfValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v exactlyOneOfValidator) ValidateDataSource(ctx context.Context, req datasource.ValidateConfigRequest, resp *datasource.ValidateConfigResponse) {
+	set := 0
+	for _, name := range v.names {
+		var value types.String
+		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root(name), &value)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if value.IsUnknown() {
+			return
+		}
+		if !value.IsNull() {
+			set++
+		}
+	}
+	if set == 1 {
+		return
+	}
+	resp.Diagnostics.AddError(
+		"Invalid attribute combination",
+		fmt.Sprintf("%s, but %d are set.", v.Description(ctx), set),
+	)
 }
 
 // oneOfString rejects string values other than the allowed ones.

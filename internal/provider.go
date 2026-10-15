@@ -23,7 +23,9 @@ import (
 var _ provider.Provider = &SlackProvider{}
 
 type APIClient interface {
+	// Users
 	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	// User Groups
 	CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup) (slack.UserGroup, error)
 	GetUserGroupsContext(ctx context.Context, opts ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
