@@ -3,14 +3,27 @@ package internal
 import (
 	"context"
 	"fmt"
-	"strings"
+	"sort"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
+)
+
+const (
+	actionOnDestroyArchive = "archive"
+	actionOnDestroyNone    = "none"
+
+	privacyImmutableDetail = "Slack has no API to convert channel privacy between public and private. " +
+		"Recreating the channel fails with name_taken because an archived channel keeps its name. " +
+		"Convert the channel to the desired privacy in Slack, then re-import it with terraform import."
 )
 
 var (
@@ -24,12 +37,14 @@ type ResourceConversation struct {
 }
 
 type ResourceConversationState struct {
-	ID        types.String `tfsdk:"id"`
-	Name      types.String `tfsdk:"name"`
-	Topic     types.String `tfsdk:"topic"`
-	Purpose   types.String `tfsdk:"purpose"`
-	IsPrivate types.Bool   `tfsdk:"is_private"`
-	Members   types.List   `tfsdk:"members"`
+	ID                   types.String `tfsdk:"id"`
+	Name                 types.String `tfsdk:"name"`
+	Topic                types.String `tfsdk:"topic"`
+	Purpose              types.String `tfsdk:"purpose"`
+	IsPrivate            types.Bool   `tfsdk:"is_private"`
+	Members              types.List   `tfsdk:"members"`
+	ActionOnDestroy      types.String `tfsdk:"action_on_destroy"`
+	AdoptExistingChannel types.Bool   `tfsdk:"adopt_existing_channel"`
 }
 
 func NewResourceConversation() resource.Resource {
@@ -44,74 +59,58 @@ func (r *ResourceConversation) Schema(_ context.Context, _ resource.SchemaReques
 	res.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:      true,
+				Description:   "The Slack channel ID, for example C0123456789.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"name": schema.StringAttribute{
 				Required: true,
+				Description: "The channel name: lowercase letters, numbers, hyphens and underscores, up to 80 characters. " +
+					"Changing it renames the channel.",
 			},
 			"topic": schema.StringAttribute{
-				Optional: true,
+				Optional:    true,
+				Description: "The channel topic. Removing it from the configuration clears the topic in Slack.",
 			},
 			"purpose": schema.StringAttribute{
-				Optional: true,
+				Optional:    true,
+				Description: "The channel purpose. Removing it from the configuration clears the purpose in Slack.",
 			},
 			"is_private": schema.BoolAttribute{
 				Computed: true,
 				Optional: true,
 				Default:  booldefault.StaticBool(false),
+				Description: "Whether the channel is private. Slack has no API to convert a channel between public and " +
+					"private, so changing this on an existing channel is rejected.",
+				PlanModifiers: []planmodifier.Bool{immutableBool(privacyImmutableDetail)},
 			},
 			"members": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "User IDs of the channel members. When set, the channel is made to contain exactly these users: " +
+					"missing users are invited and other users are removed. The bot that owns the provider token is never " +
+					"invited or removed. When unset, membership is not managed.",
+			},
+			"action_on_destroy": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString(actionOnDestroyArchive),
+				Description: `What destroying the resource does: "archive" (default) archives the channel and "none" leaves ` +
+					"it untouched in Slack and only removes it from state. Slack has no API to delete a channel, and " +
+					"unarchiving requires a user token, so archived channels cannot be restored by this provider.",
+				Validators: []validator.String{oneOfString(actionOnDestroyArchive, actionOnDestroyNone)},
+			},
+			"adopt_existing_channel": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "Whether to manage a channel that already has this name instead of failing with name_taken " +
+					"on create. Archived channels cannot be adopted. After adopting, members (when set) is enforced on the " +
+					"existing channel, so users not listed are removed, and topic and purpose from the configuration " +
+					"overwrite the existing ones.",
 			},
 		},
 	}
-}
-
-func (r *ResourceConversation) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
-	id := req.ID
-	channel, err := r.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
-		ChannelID: id,
-	})
-	if err != nil {
-		res.Diagnostics.AddError(
-			fmt.Sprintf("the conversation with the id %s does not exist", id),
-			err.Error(),
-		)
-		return
-	}
-
-	users, _, err := r.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: id,
-	})
-	if err != nil {
-		res.Diagnostics.AddError(
-			fmt.Sprintf("failed to get users in conversation with the id %s", id),
-			err.Error(),
-		)
-		return
-	}
-
-	members := make([]attr.Value, 0, len(users))
-	for _, user := range users {
-		members = append(members, types.StringValue(user))
-	}
-	memberList, diags := types.ListValue(types.StringType, members)
-	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
-
-	state := ResourceConversationState{
-		ID:        types.StringValue(channel.ID),
-		Name:      types.StringValue(channel.Name),
-		Topic:     types.StringValue(channel.Topic.Value),
-		Purpose:   types.StringValue(channel.Purpose.Value),
-		IsPrivate: types.BoolValue(channel.IsPrivate),
-		Members:   memberList,
-	}
-	diags = res.State.Set(ctx, &state)
-	res.Diagnostics.Append(diags...)
 }
 
 func (r *ResourceConversation) Configure(ctx context.Context, req resource.ConfigureRequest, res *resource.ConfigureResponse) {
@@ -129,20 +128,60 @@ func (r *ResourceConversation) Configure(ctx context.Context, req resource.Confi
 	r.client = client
 }
 
-func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
-	var plan ResourceConversationState
-	diags := req.Plan.Get(ctx, &plan)
+func (r *ResourceConversation) ImportState(ctx context.Context, req resource.ImportStateRequest, res *resource.ImportStateResponse) {
+	id := req.ID
+	channel, err := r.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+		ChannelID: id,
+	})
+	if err != nil {
+		res.Diagnostics.AddError(
+			fmt.Sprintf("the conversation with the id %s does not exist", id),
+			err.Error(),
+		)
+		return
+	}
+
+	botID, err := r.botUserID(ctx)
+	if err != nil {
+		res.Diagnostics.AddError("failed to identify the bot user", err.Error())
+		return
+	}
+	users, err := allConversationMembers(ctx, r.client, id)
+	if err != nil {
+		res.Diagnostics.AddError(
+			fmt.Sprintf("failed to get users in conversation with the id %s", id),
+			err.Error(),
+		)
+		return
+	}
+	memberList, diags := types.ListValueFrom(ctx, types.StringType, mergeMemberOrder(nil, users, botID))
 	res.Diagnostics.Append(diags...)
 	if res.Diagnostics.HasError() {
 		return
 	}
 
-	channel, err := r.client.CreateConversationContext(ctx, slack.CreateConversationParams{
-		ChannelName: plan.Name.ValueString(),
-		IsPrivate:   plan.IsPrivate.ValueBool(),
-	})
-	if err != nil {
-		res.Diagnostics.AddError("failed to create conversation", err.Error())
+	state := ResourceConversationState{
+		ID:                   types.StringValue(channel.ID),
+		Name:                 types.StringValue(channel.Name),
+		Topic:                remoteString(types.StringNull(), channel.Topic.Value),
+		Purpose:              remoteString(types.StringNull(), channel.Purpose.Value),
+		IsPrivate:            types.BoolValue(channel.IsPrivate),
+		Members:              memberList,
+		ActionOnDestroy:      types.StringValue(actionOnDestroyArchive),
+		AdoptExistingChannel: types.BoolValue(false),
+	}
+	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
+}
+
+func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRequest, res *resource.CreateResponse) {
+	var plan ResourceConversationState
+	res.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+
+	channel, adopted := r.createOrAdopt(ctx, plan, &res.Diagnostics)
+	if res.Diagnostics.HasError() {
 		return
 	}
 
@@ -161,140 +200,86 @@ func (r *ResourceConversation) Create(ctx context.Context, req resource.CreateRe
 	}
 
 	if !plan.Members.IsNull() {
-		var commaSeparatedMembers string
-		for _, member := range plan.Members.Elements() {
-			var str string
-			val, err := member.ToTerraformValue(ctx)
-			if err != nil {
-				res.Diagnostics.AddError("failed to convert member to terraform value", err.Error())
+		// A channel created just now only holds its creator, which is the bot.
+		var current []string
+		if adopted {
+			var err error
+			if current, err = allConversationMembers(ctx, r.client, channel.ID); err != nil {
+				res.Diagnostics.AddError("failed to get users in conversation", err.Error())
 				return
 			}
-			if err := val.As(&str); err != nil {
-				res.Diagnostics.AddError("failed to convert member to string", err.Error())
-				return
-			}
-			commaSeparatedMembers += str + ","
 		}
-		if _, err := r.client.InviteUsersToConversationContext(ctx, channel.ID, strings.TrimRight(commaSeparatedMembers, ",")); err != nil {
-			res.Diagnostics.AddError("failed to invite users to conversation", err.Error())
+		if err := r.syncMembers(ctx, channel.ID, plan.Members, current); err != nil {
+			res.Diagnostics.AddError("failed to set members of conversation", err.Error())
 			return
 		}
 	}
 
 	state := ResourceConversationState{
-		ID:        types.StringValue(channel.ID),
-		Name:      types.StringValue(channel.Name),
-		Topic:     types.StringValue(channel.Topic.Value),
-		Purpose:   types.StringValue(channel.Purpose.Value),
-		IsPrivate: types.BoolValue(channel.IsPrivate),
-		Members:   plan.Members,
+		ID:                   types.StringValue(channel.ID),
+		Name:                 types.StringValue(channel.Name),
+		Topic:                plan.Topic,
+		Purpose:              plan.Purpose,
+		IsPrivate:            types.BoolValue(channel.IsPrivate),
+		Members:              plan.Members,
+		ActionOnDestroy:      plan.ActionOnDestroy,
+		AdoptExistingChannel: plan.AdoptExistingChannel,
+	}
+	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
+}
+
+// createOrAdopt creates the channel, or with adopt_existing_channel returns the
+// existing channel when the name is taken. adopted reports the latter.
+func (r *ResourceConversation) createOrAdopt(
+	ctx context.Context,
+	plan ResourceConversationState,
+	diags *diag.Diagnostics,
+) (channel *slack.Channel, adopted bool) {
+	channel, err := r.client.CreateConversationContext(ctx, slack.CreateConversationParams{
+		ChannelName: plan.Name.ValueString(),
+		IsPrivate:   plan.IsPrivate.ValueBool(),
+	})
+	if err == nil {
+		return channel, false
+	}
+	if !isSlackError(err, "name_taken") {
+		diags.AddError("failed to create conversation", err.Error())
+		return nil, false
+	}
+	if !plan.AdoptExistingChannel.ValueBool() {
+		diags.AddError("failed to create conversation", err.Error()+
+			": set adopt_existing_channel = true to manage the existing channel. "+
+			"Archived channels keep their name, so an archived channel also causes this error.")
+		return nil, false
 	}
 
-	diags = res.State.Set(ctx, &state)
-	res.Diagnostics.Append(diags...)
+	existing, findErr := findConversationByName(ctx, r.client, plan.Name.ValueString())
+	switch {
+	case findErr != nil:
+		diags.AddError("failed to look up the existing conversation", findErr.Error())
+	case existing == nil:
+		diags.AddError("failed to create conversation", err.Error())
+	case existing.IsArchived:
+		diags.AddError(
+			"cannot adopt an archived conversation",
+			fmt.Sprintf("The conversation %s is archived. Unarchiving requires a user token, which the bot token "+
+				"used by this provider cannot do. Unarchive it in Slack or choose another name.", existing.ID),
+		)
+	case existing.IsPrivate != plan.IsPrivate.ValueBool():
+		diags.AddError(
+			"cannot adopt a conversation with different privacy",
+			fmt.Sprintf("The conversation %s has is_private = %t but the configuration says %t. %s",
+				existing.ID, existing.IsPrivate, plan.IsPrivate.ValueBool(), privacyImmutableDetail),
+		)
+	default:
+		return existing, true
+	}
+	return nil, false
 }
 
 func (r *ResourceConversation) Read(ctx context.Context, req resource.ReadRequest, res *resource.ReadResponse) {
 	var state ResourceConversationState
-	diags := req.State.Get(ctx, &state)
-	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
-	diags = res.State.Set(ctx, &state)
-	res.Diagnostics.Append(diags...)
-}
-
-func (r *ResourceConversation) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
-	var plan ResourceConversationState
-	diags := req.Plan.Get(ctx, &plan)
-	res.Diagnostics.Append(diags...)
-	if res.Diagnostics.HasError() {
-		return
-	}
-
-	if _, err := r.client.SetTopicOfConversationContext(ctx, plan.ID.ValueString(), plan.Topic.ValueString()); err != nil {
-		res.Diagnostics.AddError("failed to set topic of conversation", err.Error())
-		return
-	}
-
-	if _, err := r.client.SetPurposeOfConversationContext(ctx, plan.ID.ValueString(), plan.Purpose.ValueString()); err != nil {
-		res.Diagnostics.AddError("failed to set purpose of conversation", err.Error())
-		return
-	}
-
-	existingUsers, _, err := r.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: plan.ID.ValueString(),
-	})
-	if err != nil {
-		res.Diagnostics.AddError("failed to get users in conversation", err.Error())
-		return
-	}
-	existingUsersMap := make(map[string]struct{}, len(existingUsers))
-	for _, user := range existingUsers {
-		existingUsersMap[user] = struct{}{}
-	}
-
-	members := make(map[string]struct{}, len(plan.Members.Elements()))
-	for _, member := range plan.Members.Elements() {
-		var str string
-		val, err := member.ToTerraformValue(ctx)
-		if err != nil {
-			res.Diagnostics.AddError("failed to convert member to terraform value", err.Error())
-			return
-		}
-		if err := val.As(&str); err != nil {
-			res.Diagnostics.AddError("failed to convert member to string", err.Error())
-			return
-		}
-		members[str] = struct{}{}
-	}
-
-	var commaSeparatedMembers string
-	for member := range members {
-		if _, ok := existingUsersMap[member]; !ok {
-			commaSeparatedMembers += member + ","
-		}
-	}
-
-	var removedMembers []string
-	for member := range existingUsersMap {
-		if _, ok := members[member]; !ok {
-			removedMembers = append(removedMembers, member)
-		}
-	}
-
-	if commaSeparatedMembers != "" {
-		if _, err := r.client.InviteUsersToConversationContext(ctx, plan.ID.ValueString(), strings.TrimRight(commaSeparatedMembers, ",")); err != nil {
-			res.Diagnostics.AddError("failed to invite users to conversation", err.Error())
-			return
-		}
-	}
-
-	for _, member := range removedMembers {
-		if err := r.client.KickUserFromConversationContext(ctx, plan.ID.ValueString(), member); err != nil {
-			res.Diagnostics.AddError("failed to kick user from conversation", err.Error())
-			return
-		}
-	}
-
-	state := ResourceConversationState{
-		ID:        plan.ID,
-		Name:      plan.Name,
-		Topic:     plan.Topic,
-		Purpose:   plan.Purpose,
-		IsPrivate: plan.IsPrivate,
-		Members:   plan.Members,
-	}
-
-	diags = res.State.Set(ctx, &state)
-	res.Diagnostics.Append(diags...)
-}
-
-func (r *ResourceConversation) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
-	var state ResourceConversationState
-	diags := req.State.Get(ctx, &state)
-	res.Diagnostics.Append(diags...)
+	res.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if res.Diagnostics.HasError() {
 		return
 	}
@@ -303,25 +288,154 @@ func (r *ResourceConversation) Delete(ctx context.Context, req resource.DeleteRe
 		ChannelID: state.ID.ValueString(),
 	})
 	if err != nil {
-		res.Diagnostics.AddError(
-			fmt.Sprintf("the conversation with the id %s does not exist", state.ID.String()),
-			err.Error(),
-		)
+		if isSlackError(err, "channel_not_found") {
+			res.State.RemoveResource(ctx)
+			return
+		}
+		res.Diagnostics.AddError("failed to get conversation", err.Error())
+		return
+	}
+	// Archiving is how this resource deletes a channel, so an archived
+	// channel counts as gone.
+	if channel.IsArchived {
+		res.State.RemoveResource(ctx)
 		return
 	}
 
-	user, mpim := channel.User, channel.IsMpIM
-	if user != "" || mpim {
-		if _, closed, err := r.client.CloseConversationContext(ctx, state.ID.ValueString()); err != nil {
-			if !closed {
-				res.Diagnostics.AddError("failed to close conversation", err.Error())
-				return
-			}
+	state.Name = types.StringValue(channel.Name)
+	state.Topic = remoteString(state.Topic, channel.Topic.Value)
+	state.Purpose = remoteString(state.Purpose, channel.Purpose.Value)
+	state.IsPrivate = types.BoolValue(channel.IsPrivate)
+
+	if !state.Members.IsNull() {
+		var prior []string
+		res.Diagnostics.Append(state.Members.ElementsAs(ctx, &prior, false)...)
+		if res.Diagnostics.HasError() {
+			return
 		}
-	} else {
-		if err := r.client.ArchiveConversationContext(ctx, state.ID.ValueString()); err != nil {
-			res.Diagnostics.AddError("failed to archive conversation", err.Error())
+		botID, err := r.botUserID(ctx)
+		if err != nil {
+			res.Diagnostics.AddError("failed to identify the bot user", err.Error())
+			return
+		}
+		remote, err := allConversationMembers(ctx, r.client, state.ID.ValueString())
+		if err != nil {
+			res.Diagnostics.AddError("failed to get users in conversation", err.Error())
+			return
+		}
+		members, diags := types.ListValueFrom(ctx, types.StringType, mergeMemberOrder(prior, remote, botID))
+		res.Diagnostics.Append(diags...)
+		if res.Diagnostics.HasError() {
+			return
+		}
+		state.Members = members
+	}
+
+	res.Diagnostics.Append(res.State.Set(ctx, &state)...)
+}
+
+func (r *ResourceConversation) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
+	var plan, state ResourceConversationState
+	res.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	res.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+	id := state.ID.ValueString()
+
+	if !plan.Name.Equal(state.Name) {
+		if _, err := r.client.RenameConversationContext(ctx, id, plan.Name.ValueString()); err != nil {
+			res.Diagnostics.AddError("failed to rename conversation", err.Error())
 			return
 		}
 	}
+
+	if !plan.Topic.Equal(state.Topic) {
+		if _, err := r.client.SetTopicOfConversationContext(ctx, id, plan.Topic.ValueString()); err != nil {
+			res.Diagnostics.AddError("failed to set topic of conversation", err.Error())
+			return
+		}
+	}
+
+	if !plan.Purpose.Equal(state.Purpose) {
+		if _, err := r.client.SetPurposeOfConversationContext(ctx, id, plan.Purpose.ValueString()); err != nil {
+			res.Diagnostics.AddError("failed to set purpose of conversation", err.Error())
+			return
+		}
+	}
+
+	if !plan.Members.IsNull() && !plan.Members.Equal(state.Members) {
+		current, err := allConversationMembers(ctx, r.client, id)
+		if err != nil {
+			res.Diagnostics.AddError("failed to get users in conversation", err.Error())
+			return
+		}
+		if err := r.syncMembers(ctx, id, plan.Members, current); err != nil {
+			res.Diagnostics.AddError("failed to set members of conversation", err.Error())
+			return
+		}
+	}
+
+	plan.ID = state.ID
+	res.Diagnostics.Append(res.State.Set(ctx, &plan)...)
+}
+
+func (r *ResourceConversation) Delete(ctx context.Context, req resource.DeleteRequest, res *resource.DeleteResponse) {
+	var state ResourceConversationState
+	res.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if res.Diagnostics.HasError() {
+		return
+	}
+
+	if state.ActionOnDestroy.ValueString() == actionOnDestroyNone {
+		return
+	}
+
+	err := r.client.ArchiveConversationContext(ctx, state.ID.ValueString())
+	if err != nil && !isSlackError(err, "already_archived") && !isSlackError(err, "channel_not_found") {
+		res.Diagnostics.AddError("failed to archive conversation", err.Error())
+	}
+}
+
+// syncMembers makes the channel hold exactly the desired users, apart from the
+// bot, given the users current in it.
+func (r *ResourceConversation) syncMembers(ctx context.Context, channelID string, desired types.List, current []string) error {
+	var users []string
+	if diags := desired.ElementsAs(ctx, &users, false); diags.HasError() {
+		return fmt.Errorf("read members from the plan: %s", diags)
+	}
+	botID, err := r.botUserID(ctx)
+	if err != nil {
+		return err
+	}
+
+	invite, kick := diffMembers(users, current, botID)
+	if err := inviteMembers(ctx, r.client, channelID, invite); err != nil {
+		return fmt.Errorf("invite users: %w", err)
+	}
+	sort.Strings(kick)
+	for _, user := range kick {
+		if err := r.client.KickUserFromConversationContext(ctx, channelID, user); err != nil {
+			return fmt.Errorf("kick user %s: %w", user, err)
+		}
+	}
+	return nil
+}
+
+// botUserID returns the user ID of the token the provider runs as.
+func (r *ResourceConversation) botUserID(ctx context.Context) (string, error) {
+	resp, err := r.client.AuthTestContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("auth.test: %w", err)
+	}
+	return resp.UserID, nil
+}
+
+// remoteString converts a topic or purpose read from Slack to state, keeping
+// a null prior value null when Slack holds the empty string.
+func remoteString(prior types.String, remote string) types.String {
+	if prior.IsNull() && remote == "" {
+		return prior
+	}
+	return types.StringValue(remote)
 }
