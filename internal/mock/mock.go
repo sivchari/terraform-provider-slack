@@ -292,6 +292,23 @@ func (mr *MockAPIClientMockRecorder) InviteUsersToConversationContext(ctx, chann
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InviteUsersToConversationContext", reflect.TypeOf((*MockAPIClient)(nil).InviteUsersToConversationContext), varargs...)
 }
 
+// JoinConversationContext mocks base method.
+func (m *MockAPIClient) JoinConversationContext(ctx context.Context, channelID string) (*slack.Channel, string, []string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "JoinConversationContext", ctx, channelID)
+	ret0, _ := ret[0].(*slack.Channel)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].([]string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// JoinConversationContext indicates an expected call of JoinConversationContext.
+func (mr *MockAPIClientMockRecorder) JoinConversationContext(ctx, channelID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "JoinConversationContext", reflect.TypeOf((*MockAPIClient)(nil).JoinConversationContext), ctx, channelID)
+}
+
 // KickUserFromConversationContext mocks base method.
 func (m *MockAPIClient) KickUserFromConversationContext(ctx context.Context, channelID, user string) error {
 	m.ctrl.T.Helper()

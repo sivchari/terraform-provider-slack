@@ -38,6 +38,7 @@ type APIClient interface {
 	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
 	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
 	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slack.Channel, error)
+	JoinConversationContext(ctx context.Context, channelID string) (*slack.Channel, string, []string, error)
 	KickUserFromConversationContext(ctx context.Context, channelID string, user string) error
 	ArchiveConversationContext(ctx context.Context, channelID string) error
 	RenameConversationContext(ctx context.Context, channelID, channelName string) (*slack.Channel, error)
