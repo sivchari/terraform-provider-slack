@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -207,6 +208,173 @@ func TestAccAppResourceRemovedRemotely(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestAccAppResourceDeleteAppDeletedRemotely covers destroy of an app that is
+// already gone: apps.manifest.delete answers app_not_found, which must count
+// as success or the resource could never leave state.
+func TestAccAppResourceDeleteAppDeletedRemotely(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	remote := testAccAppManifest("test")
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(remote, nil).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(
+		&slack.SlackResponse{Ok: false, Error: "app_not_found"},
+		slack.SlackErrorResponse{Err: "app_not_found"},
+	).MinTimes(1)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+		},
+	})
+}
+
+// TestAccAppResourceUpdateCallAppNotFound covers an update where the export
+// succeeds but apps.manifest.update itself answers app_not_found.
+func TestAccAppResourceUpdateCallAppNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").Return(testAccAppManifest("test"), nil).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").Return(
+		nil,
+		&appmanifest.Error{Method: "apps.manifest.update", Code: "app_not_found"},
+	).MinTimes(1)
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config:      testAccAppResourceRenamed(),
+				ExpectError: regexp.MustCompile(`(?is)app\s+not\s+found.*run\s+terraform\s+plan\s+again\s+to\s+recreate`),
+			},
+		},
+	})
+}
+
+// TestAccAppResourceUpdatePermissionsUpdated covers an update whose scope
+// change Slack reports through permissions_updated. The provider only warns,
+// so the apply must still succeed and store the planned values.
+func TestAccAppResourceUpdatePermissionsUpdated(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	remote := testAccAppManifest("test")
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").Return(&appmanifest.CreateResponse{AppID: "A012345678"}, nil).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (appmanifest.Document, error) {
+			return remote, nil
+		},
+	).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest appmanifest.Document, _, _ string) (*slack.UpdateManifestResponse, error) {
+			remote = manifest
+			return &slack.UpdateManifestResponse{AppId: "A012345678", PermissionsUpdated: true}, nil
+		},
+	).MinTimes(1)
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResource(),
+				Check:  resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+			},
+			{
+				Config: testAccAppResourceRenamed(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "id", "A012345678"),
+					resource.TestCheckResourceAttr("slack_app.test", "display_information.name", "test-renamed"),
+				),
+			},
+		},
+	})
+}
+
+func TestIsAppNotFound_ErrorForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "appmanifest error",
+			err:  &appmanifest.Error{Method: "apps.manifest.export", Code: "app_not_found"},
+			want: true,
+		},
+		{
+			name: "slack error response by value",
+			err:  slack.SlackErrorResponse{Err: "app_not_found"},
+			want: true,
+		},
+		{
+			name: "wrapped slack error response",
+			err:  fmt.Errorf("delete: %w", slack.SlackErrorResponse{Err: "app_not_found"}),
+			want: true,
+		},
+		{
+			name: "appmanifest error with another code",
+			err:  &appmanifest.Error{Method: "apps.manifest.export", Code: "invalid_auth"},
+			want: false,
+		},
+		{
+			name: "slack error response with another code",
+			err:  slack.SlackErrorResponse{Err: "invalid_auth"},
+			want: false,
+		},
+		{
+			name: "slack error response by pointer",
+			err:  &slack.SlackErrorResponse{Err: "app_not_found"},
+			want: false,
+		},
+		{
+			name: "plain error with the code",
+			err:  errors.New("app_not_found"),
+			want: false,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isAppNotFound(tt.err); got != tt.want {
+				t.Errorf("isAppNotFound(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 func testAccAppManifest(name string) appmanifest.Document {
