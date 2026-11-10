@@ -33,6 +33,22 @@ type Credentials struct {
 	SigningSecret     string `json:"signing_secret"`
 }
 
+// Manifest is slack.Manifest plus the manifest fields
+// github.com/slack-go/slack v0.15.0 does not model. Its Features field
+// shadows the embedded slack.Manifest.Features in encoding/json (the
+// shallower field wins), so always set features through Manifest.Features;
+// a value left in Manifest.Manifest.Features is neither sent nor decoded.
+type Manifest struct {
+	slack.Manifest
+	Features Features `json:"features,omitempty"`
+}
+
+// Features is slack.Features plus features.unfurl_domains.
+type Features struct {
+	slack.Features
+	UnfurlDomains []string `json:"unfurl_domains,omitempty"`
+}
+
 // Document is an app manifest kept as generic JSON. apps.manifest.export is
 // decoded into it so that fields this provider does not model survive a
 // read-merge-write round trip through apps.manifest.update, which replaces
@@ -40,7 +56,7 @@ type Credentials struct {
 type Document map[string]any
 
 // NewDocument converts a typed manifest into its generic JSON form.
-func NewDocument(manifest *slack.Manifest) (Document, error) {
+func NewDocument(manifest *Manifest) (Document, error) {
 	body, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("marshal manifest: %w", err)
@@ -54,12 +70,12 @@ func NewDocument(manifest *slack.Manifest) (Document, error) {
 
 // Manifest decodes the generic JSON form into the typed manifest, dropping
 // the fields the typed manifest does not model.
-func (d Document) Manifest() (*slack.Manifest, error) {
+func (d Document) Manifest() (*Manifest, error) {
 	body, err := json.Marshal(d)
 	if err != nil {
 		return nil, fmt.Errorf("marshal manifest document: %w", err)
 	}
-	var manifest slack.Manifest
+	var manifest Manifest
 	if err := json.Unmarshal(body, &manifest); err != nil {
 		return nil, fmt.Errorf("decode manifest document: %w", err)
 	}
