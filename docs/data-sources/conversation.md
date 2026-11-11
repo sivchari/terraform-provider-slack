@@ -3,12 +3,12 @@
 page_title: "slack_conversation Data Source - terraform-provider-slack"
 subcategory: ""
 description: |-
-  
+  Looks up a Slack public or private channel by ID or name. Exactly one of id or name must be set. Archived channels are found too; check is_archived.
 ---
 
 # slack_conversation (Data Source)
 
-
+Looks up a Slack public or private channel by ID or name. Exactly one of id or name must be set. Archived channels are found too; check is_archived.
 
 
 
@@ -17,29 +17,29 @@ description: |-
 
 ### Optional
 
-- `user` (String)
+- `id` (String) ID of the channel, for example C0123456789. Conflicts with name.
+- `name` (String) Name of the channel without the leading #. Conflicts with id. Slack cannot filter by name, so every channel is listed to find it; prefer id on large workspaces.
 
 ### Read-Only
 
-- `connected_team_ids` (List of String)
-- `creator` (String)
-- `id` (String) The ID of this resource.
-- `internal_team_ids` (List of String)
-- `is_archived` (Boolean)
-- `is_private` (Boolean)
-- `members` (List of String)
-- `name` (String)
-- `purpose` (Attributes) (see [below for nested schema](#nestedatt--purpose))
-- `shared_team_ids` (List of String)
-- `topic` (Attributes) (see [below for nested schema](#nestedatt--topic))
+- `connected_team_ids` (List of String) IDs of the teams that Slack reports as connected to the channel.
+- `creator` (String) ID of the user who created the channel.
+- `internal_team_ids` (List of String) IDs of the teams within the same organization that Slack reports for the channel.
+- `is_archived` (Boolean) Whether the channel is archived.
+- `is_private` (Boolean) Whether the channel is private.
+- `members` (List of String) IDs of the users in the channel, including the provider's own bot user.
+- `purpose` (Attributes) Purpose of the channel. (see [below for nested schema](#nestedatt--purpose))
+- `shared_team_ids` (List of String) IDs of the teams that Slack reports the channel as shared with.
+- `topic` (Attributes) Topic of the channel. (see [below for nested schema](#nestedatt--topic))
+- `user` (String) ID of the other user in a direct message. Empty for public and private channels.
 
 <a id="nestedatt--purpose"></a>
 ### Nested Schema for `purpose`
 
 Read-Only:
 
-- `creator` (String)
-- `value` (String)
+- `creator` (String) ID of the user who set the purpose.
+- `value` (String) Text of the purpose.
 
 
 <a id="nestedatt--topic"></a>
@@ -47,5 +47,5 @@ Read-Only:
 
 Read-Only:
 
-- `creator` (String)
-- `value` (String)
+- `creator` (String) ID of the user who set the topic.
+- `value` (String) Text of the topic.
