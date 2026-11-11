@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -60,6 +61,7 @@ type AppFeatures struct {
 	Shortcuts     []AppShortcut     `tfsdk:"shortcuts"`
 	SlashCommands []AppSlashCommand `tfsdk:"slash_commands"`
 	WorkflowSteps []AppWorkflowStep `tfsdk:"workflow_steps"`
+	UnfurlDomains types.List        `tfsdk:"unfurl_domains"`
 }
 
 type AppHome struct {
@@ -148,7 +150,7 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 			"Updates go through `apps.manifest.update`, which replaces the whole\n" +
 			"manifest. The provider therefore exports the current manifest first and\n" +
 			"only overlays the fields in this schema, so manifest fields it does not\n" +
-			"model (for example `features.unfurl_domains`, `functions` or\n" +
+			"model (for example `functions` or\n" +
 			"`settings.token_rotation_enabled`) are kept as they are. Such fields\n" +
 			"cannot be changed or removed through Terraform.\n\n" +
 			"Destroying the resource permanently deletes the app through\n" +
@@ -271,6 +273,16 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 								},
 							},
 						},
+					},
+					"unfurl_domains": schema.ListAttribute{
+						Optional:    true,
+						ElementType: types.StringType,
+						MarkdownDescription: "Domains whose links the app unfurls (`features.unfurl_domains`, " +
+							"\"App unfurl domains\" under Event Subscriptions). Slack accepts up to 5 domains " +
+							"without a protocol, path or query string. Leaving the attribute unset (null) leaves " +
+							"the app's unfurl domains untouched, including ones set in the app settings; " +
+							"removing it from the configuration stops managing them without removing them. " +
+							"Set it to `[]` to remove every unfurl domain.",
 					},
 					"workflow_steps": schema.ListNestedAttribute{
 						Optional: true,
@@ -461,8 +473,8 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	// apps.manifest.update replaces the whole manifest, so the planned
 	// values are overlaid onto the exported manifest and only the fields the
-	// schema manages change; everything else (Agents & AI Apps, unfurl
-	// domains, token rotation, functions, ...) is sent back as exported.
+	// schema manages change; everything else (Agents & AI Apps, token
+	// rotation, functions, ...) is sent back as exported.
 	current, err := r.client.ExportAppManifest(ctx, "", state.ID.ValueString())
 	if err != nil {
 		if isAppNotFound(err) {
@@ -494,7 +506,7 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 	// comes from Slack and is only cleaned up along the managed paths.
 	pruneZeroObjects(planned)
 
-	merged := mergeManifest(current, planned, managedManifestPathsOnce())
+	merged := mergeManifest(current, planned, managedPathsForPlan(plan))
 
 	updated, err := r.client.UpdateAppManifest(ctx, merged, "", state.ID.ValueString())
 	if err != nil {
@@ -575,23 +587,49 @@ func (r *ResourceApp) ImportState(ctx context.Context, req resource.ImportStateR
 	res.Diagnostics.Append(diags...)
 }
 
-func manifestFromState(ctx context.Context, state ResourceAppState) (*slack.Manifest, diag.Diagnostics) {
+// unfurlDomainsPath is the manifest path of features.unfurl_domains.
+var unfurlDomainsPath = []string{"features", "unfurl_domains"}
+
+// managedPathsForPlan returns the managed paths Update overlays for plan.
+// features.unfurl_domains is only managed while it is set: unlike the other
+// optional attributes, a null unfurl_domains leaves the exported value in
+// place, so unfurl domains added in the app settings survive an update of an
+// app whose configuration predates the attribute. An explicit [] is set and
+// stays managed, which removes every domain.
+func managedPathsForPlan(plan ResourceAppState) [][]string {
+	managed := managedManifestPathsOnce()
+	if plan.Features != nil && !plan.Features.UnfurlDomains.IsNull() {
+		return managed
+	}
+	return slices.DeleteFunc(slices.Clone(managed), func(path []string) bool {
+		return slices.Equal(path, unfurlDomainsPath)
+	})
+}
+
+func manifestFromState(ctx context.Context, state ResourceAppState) (*appmanifest.Manifest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	manifest := &slack.Manifest{
-		Display: slack.Display{
-			Name:            state.DisplayInformation.Name.ValueString(),
-			Description:     state.DisplayInformation.Description.ValueString(),
-			LongDescription: state.DisplayInformation.LongDescription.ValueString(),
-			BackgroundColor: state.DisplayInformation.BackgroundColor.ValueString(),
+	manifest := &appmanifest.Manifest{
+		Manifest: slack.Manifest{
+			Display: slack.Display{
+				Name:            state.DisplayInformation.Name.ValueString(),
+				Description:     state.DisplayInformation.Description.ValueString(),
+				LongDescription: state.DisplayInformation.LongDescription.ValueString(),
+				BackgroundColor: state.DisplayInformation.BackgroundColor.ValueString(),
+			},
 		},
 	}
 
 	if state.Features != nil {
-		manifest.Features = slack.Features{
-			Shortcuts:     shortcutsFromState(state.Features.Shortcuts),
-			SlashCommands: slashCommandsFromState(state.Features.SlashCommands),
-			WorkflowSteps: workflowStepsFromState(state.Features.WorkflowSteps),
+		unfurlDomains, d := stringsFromList(ctx, state.Features.UnfurlDomains)
+		diags.Append(d...)
+		manifest.Features = appmanifest.Features{
+			Features: slack.Features{
+				Shortcuts:     shortcutsFromState(state.Features.Shortcuts),
+				SlashCommands: slashCommandsFromState(state.Features.SlashCommands),
+				WorkflowSteps: workflowStepsFromState(state.Features.WorkflowSteps),
+			},
+			UnfurlDomains: unfurlDomains,
 		}
 		if state.Features.AppHome != nil {
 			manifest.Features.AppHome = slack.AppHome{
@@ -659,7 +697,12 @@ func manifestFromState(ctx context.Context, state ResourceAppState) (*slack.Mani
 // was null or absent, and keep the prior's explicit zero form ("" / false)
 // otherwise. Without this, a config that omits an optional attribute would
 // show a permanent diff against the refreshed state.
-func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing ResourceAppState) (ResourceAppState, diag.Diagnostics) {
+//
+// features.unfurl_domains is the exception: it is only read back while the
+// prior value is set (see managedPathsForPlan). A null prior means the
+// attribute is not managed, so the remote domains are not adopted into state
+// and an unset attribute never shows a diff.
+func stateFromManifest(ctx context.Context, manifest *appmanifest.Manifest, existing ResourceAppState) (ResourceAppState, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	state := existing
@@ -684,6 +727,12 @@ func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing R
 		Shortcuts:     shortcutsToState(manifest.Features.Shortcuts, pf.Shortcuts),
 		SlashCommands: slashCommandsToState(manifest.Features.SlashCommands, pf.SlashCommands),
 		WorkflowSteps: workflowStepsToState(manifest.Features.WorkflowSteps, pf.WorkflowSteps),
+		UnfurlDomains: types.ListNull(types.StringType),
+	}
+	if !pf.UnfurlDomains.IsNull() && !pf.UnfurlDomains.IsUnknown() {
+		unfurlDomains, d := normList(ctx, manifest.Features.UnfurlDomains, pf.UnfurlDomains)
+		diags.Append(d...)
+		features.UnfurlDomains = unfurlDomains
 	}
 	if !isZeroAppHome(manifest.Features.AppHome) || pf.AppHome != nil {
 		priorAppHome := pf.AppHome
@@ -706,6 +755,8 @@ func stateFromManifest(ctx context.Context, manifest *slack.Manifest, existing R
 			AlwaysOnline: normBool(manifest.Features.BotUser.AlwaysOnline, priorBotUser.AlwaysOnline),
 		}
 	}
+	// unfurl_domains is null whenever priorFeatures is nil, so it never
+	// brings the features object into state on its own.
 	if priorFeatures == nil && features.AppHome == nil && features.BotUser == nil &&
 		features.Shortcuts == nil && features.SlashCommands == nil && features.WorkflowSteps == nil {
 		state.Features = nil

@@ -72,7 +72,7 @@ func (mr *MockAPIClientMockRecorder) AuthTestContext(ctx any) *gomock.Call {
 }
 
 // CreateAppManifest mocks base method.
-func (m *MockAPIClient) CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error) {
+func (m *MockAPIClient) CreateAppManifest(ctx context.Context, manifest *appmanifest.Manifest, token string) (*appmanifest.CreateResponse, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateAppManifest", ctx, manifest, token)
 	ret0, _ := ret[0].(*appmanifest.CreateResponse)

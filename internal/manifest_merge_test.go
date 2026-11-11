@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 )
@@ -30,6 +32,7 @@ func TestManagedManifestPaths(t *testing.T) {
 		"display_information.description",
 		"features.bot_user.always_online",
 		"features.slash_commands",
+		"features.unfurl_domains",
 		"oauth_config.scopes.bot",
 		"settings.interactivity.is_enabled",
 		"settings.socket_mode_enabled",
@@ -367,5 +370,108 @@ func TestMergeManifest_DoesNotMutateInputs(t *testing.T) {
 
 	if got := current["display_information"].(map[string]any); got["name"] != "old" || got["description"] != "old" {
 		t.Errorf("current = %v, want it untouched", current)
+	}
+}
+
+func TestManagedPathsForPlan(t *testing.T) {
+	t.Parallel()
+
+	domains := types.ListValueMust(types.StringType, []attr.Value{types.StringValue("example.com")})
+	tests := []struct {
+		name        string
+		features    *AppFeatures
+		wantManaged bool
+	}{
+		{name: "features null", features: nil, wantManaged: false},
+		{name: "unfurl_domains null", features: &AppFeatures{UnfurlDomains: types.ListNull(types.StringType)}, wantManaged: false},
+		{name: "unfurl_domains empty", features: &AppFeatures{UnfurlDomains: types.ListValueMust(types.StringType, []attr.Value{})}, wantManaged: true},
+		{name: "unfurl_domains set", features: &AppFeatures{UnfurlDomains: domains}, wantManaged: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			paths := managedPathsForPlan(ResourceAppState{Features: tt.features})
+			got := slices.ContainsFunc(paths, func(path []string) bool {
+				return slices.Equal(path, unfurlDomainsPath)
+			})
+			if got != tt.wantManaged {
+				t.Errorf("managedPathsForPlan() manages features.unfurl_domains = %v, want %v", got, tt.wantManaged)
+			}
+			// the other managed paths are unaffected
+			if want := len(managedManifestPathsOnce()); len(paths) != want && len(paths) != want-1 {
+				t.Errorf("len(managedPathsForPlan()) = %d, want %d or %d", len(paths), want, want-1)
+			}
+		})
+	}
+
+	// the shared, cached slice must not be modified
+	if !slices.ContainsFunc(managedManifestPathsOnce(), func(path []string) bool {
+		return slices.Equal(path, unfurlDomainsPath)
+	}) {
+		t.Error("managedManifestPathsOnce() lost features.unfurl_domains")
+	}
+}
+
+func TestMergeManifest_UnfurlDomains(t *testing.T) {
+	t.Parallel()
+
+	current := appmanifest.Document{
+		"display_information": map[string]any{"name": "test"},
+		"features": map[string]any{
+			"bot_user":       map[string]any{"display_name": "bot"},
+			"unfurl_domains": []any{"admin.example.com"},
+		},
+	}
+	unset := managedPathsForPlan(ResourceAppState{})
+	set := managedPathsForPlan(ResourceAppState{Features: &AppFeatures{
+		UnfurlDomains: types.ListValueMust(types.StringType, []attr.Value{}),
+	}})
+
+	tests := []struct {
+		name    string
+		planned appmanifest.Document
+		managed [][]string
+		want    any
+		wantOK  bool
+	}{
+		{
+			name:    "unset keeps the exported domains",
+			planned: appmanifest.Document{"display_information": map[string]any{"name": "test"}},
+			managed: unset,
+			want:    []any{"admin.example.com"},
+			wantOK:  true,
+		},
+		{
+			name: "set replaces the exported domains",
+			planned: appmanifest.Document{
+				"display_information": map[string]any{"name": "test"},
+				"features":            map[string]any{"unfurl_domains": []any{"example.com"}},
+			},
+			managed: set,
+			want:    []any{"example.com"},
+			wantOK:  true,
+		},
+		{
+			// [] is omitted from the planned document, so the managed path
+			// is absent and the merge removes it.
+			name:    "empty list removes the exported domains",
+			planned: appmanifest.Document{"display_information": map[string]any{"name": "test"}},
+			managed: set,
+			wantOK:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			merged := mergeManifest(current, tt.planned, tt.managed)
+			got, ok := lookupPath(merged, unfurlDomainsPath)
+			if ok != tt.wantOK || !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("merged features.unfurl_domains = %v (present %v), want %v (present %v)", got, ok, tt.want, tt.wantOK)
+			}
+		})
 	}
 }

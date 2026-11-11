@@ -13,7 +13,7 @@ description: |-
   Updates go through apps.manifest.update, which replaces the whole
   manifest. The provider therefore exports the current manifest first and
   only overlays the fields in this schema, so manifest fields it does not
-  model (for example features.unfurl_domains, functions or
+  model (for example functions or
   settings.token_rotation_enabled) are kept as they are. Such fields
   cannot be changed or removed through Terraform.
   Destroying the resource permanently deletes the app through
@@ -39,7 +39,7 @@ null for imported apps.
 Updates go through `apps.manifest.update`, which replaces the whole
 manifest. The provider therefore exports the current manifest first and
 only overlays the fields in this schema, so manifest fields it does not
-model (for example `features.unfurl_domains`, `functions` or
+model (for example `functions` or
 `settings.token_rotation_enabled`) are kept as they are. Such fields
 cannot be changed or removed through Terraform.
 
@@ -98,6 +98,7 @@ Optional:
 - `bot_user` (Attributes) (see [below for nested schema](#nestedatt--features--bot_user))
 - `shortcuts` (Attributes List) (see [below for nested schema](#nestedatt--features--shortcuts))
 - `slash_commands` (Attributes List) (see [below for nested schema](#nestedatt--features--slash_commands))
+- `unfurl_domains` (List of String) Domains whose links the app unfurls (`features.unfurl_domains`, "App unfurl domains" under Event Subscriptions). Slack accepts up to 5 domains without a protocol, path or query string. Leaving the attribute unset (null) leaves the app's unfurl domains untouched, including ones set in the app settings; removing it from the configuration stops managing them without removing them. Set it to `[]` to remove every unfurl domain.
 - `workflow_steps` (Attributes List) (see [below for nested schema](#nestedatt--features--workflow_steps))
 
 <a id="nestedatt--features--app_home"></a>

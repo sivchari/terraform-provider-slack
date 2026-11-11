@@ -84,7 +84,7 @@ type createAppManifestHTTPResponse struct {
 // CreateAppManifest creates an app from an app manifest via a raw HTTP call
 // to apps.manifest.create, since slack.Client.CreateManifestContext discards
 // app_id, credentials and oauth_authorize_url.
-func (c *Client) CreateAppManifest(ctx context.Context, manifest *slack.Manifest, token string) (*appmanifest.CreateResponse, error) {
+func (c *Client) CreateAppManifest(ctx context.Context, manifest *appmanifest.Manifest, token string) (*appmanifest.CreateResponse, error) {
 	if token == "" {
 		token = c.configToken
 	}
@@ -212,12 +212,12 @@ func (c *Client) postManifestMethod(ctx context.Context, method string, values u
 }
 
 // marshalManifest encodes the manifest for apps.manifest.create, dropping
-// objects that encoding/json cannot omit because slack.Manifest nests value
+// objects that encoding/json cannot omit because the manifest nests value
 // structs: empty objects (recursively) and objects still carrying nothing
 // but non-omittable zero fields (see zeroManifestForms). Slack treats an
 // absent key and its zero form the same, except for event_subscriptions,
 // where {} is rejected whenever Socket Mode is disabled.
-func marshalManifest(manifest *slack.Manifest) ([]byte, error) {
+func marshalManifest(manifest *appmanifest.Manifest) ([]byte, error) {
 	doc, err := appmanifest.NewDocument(manifest)
 	if err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func pruneZeroObjects(doc map[string]any) {
 var zeroManifestForms = buildZeroManifestForms()
 
 func buildZeroManifestForms() map[string]map[string]any {
-	doc, err := appmanifest.NewDocument(&slack.Manifest{})
+	doc, err := appmanifest.NewDocument(&appmanifest.Manifest{})
 	if err != nil {
 		panic(fmt.Sprintf("marshal zero manifest: %v", err))
 	}

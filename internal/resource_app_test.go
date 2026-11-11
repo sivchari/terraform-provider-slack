@@ -549,3 +549,126 @@ func TestAccAppResourceUpdatePreservesUnmanagedFields(t *testing.T) {
 		},
 	})
 }
+
+// TestAccAppResourceUnfurlDomains walks features.unfurl_domains through
+// create, change, unset and [] against a fake that stores what it is sent,
+// and relies on the framework's post-apply plan check for no-op plans.
+func TestAccAppResourceUnfurlDomains(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mock.NewMockAPIClient(ctrl)
+
+	var remote appmanifest.Document
+	var updates []appmanifest.Document
+	client.EXPECT().CreateAppManifest(gomock.Any(), gomock.Any(), "").DoAndReturn(
+		func(_ context.Context, manifest *appmanifest.Manifest, _ string) (*appmanifest.CreateResponse, error) {
+			doc, err := appmanifest.NewDocument(manifest)
+			if err != nil {
+				return nil, err
+			}
+			pruneZeroObjects(doc)
+			remote = doc
+			return &appmanifest.CreateResponse{AppID: "A012345678"}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().ExportAppManifest(gomock.Any(), "", "A012345678").DoAndReturn(
+		func(context.Context, string, string) (appmanifest.Document, error) {
+			return remote, nil
+		},
+	).AnyTimes()
+	client.EXPECT().UpdateAppManifest(gomock.Any(), gomock.Any(), "", "A012345678").DoAndReturn(
+		func(_ context.Context, manifest appmanifest.Document, _, _ string) (*slack.UpdateManifestResponse, error) {
+			updates = append(updates, manifest)
+			remote = manifest
+			return &slack.UpdateManifestResponse{}, nil
+		},
+	).AnyTimes()
+	client.EXPECT().DeleteManifestContext(gomock.Any(), "", "A012345678").Return(&slack.SlackResponse{Ok: true}, nil).AnyTimes()
+
+	remoteDomains := func(want ...any) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			got, ok := lookupPath(remote, unfurlDomainsPath)
+			if len(want) == 0 {
+				if ok {
+					return fmt.Errorf("remote features.unfurl_domains = %v, want it absent", got)
+				}
+				return nil
+			}
+			if !reflect.DeepEqual(got, want) {
+				return fmt.Errorf("remote features.unfurl_domains = %v, want %v", got, want)
+			}
+			return nil
+		}
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6ProviderFactories(client),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAppResourceUnfurlDomains(`["example.com", "example.org"]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.#", "2"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.0", "example.com"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.1", "example.org"),
+					remoteDomains("example.com", "example.org"),
+				),
+			},
+			{
+				Config: testAccAppResourceUnfurlDomains(`["example.org"]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.#", "1"),
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.0", "example.org"),
+					remoteDomains("example.org"),
+				),
+			},
+			{
+				// Removing the attribute stops managing the domains: they
+				// stay on the app and do not come back as a diff.
+				Config: testAccAppResource(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("slack_app.test", "features.unfurl_domains"),
+					remoteDomains("example.org"),
+				),
+			},
+			{
+				// [] is the way to remove every domain, and stays a no-op.
+				Config: testAccAppResourceUnfurlDomains(`[]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("slack_app.test", "features.unfurl_domains.#", "0"),
+					remoteDomains(),
+					func(*terraform.State) error {
+						if len(updates) == 0 {
+							return fmt.Errorf("apps.manifest.update was not called")
+						}
+						last := updates[len(updates)-1]
+						if got := last["features"].(map[string]any)["bot_user"]; got == nil {
+							return fmt.Errorf("updated manifest %v lost features.bot_user", last)
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+func testAccAppResourceUnfurlDomains(domains string) string {
+	return providerConfig + fmt.Sprintf(`
+resource "slack_app" "test" {
+	display_information = {
+		name = "test"
+	}
+	features = {
+		bot_user = {
+			display_name = "test-bot"
+		}
+		unfurl_domains = %s
+	}
+	oauth_config = {
+		scopes = {
+			bot = ["chat:write"]
+		}
+	}
+}`, domains)
+}

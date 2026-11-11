@@ -45,8 +45,8 @@ func TestClientCreateAppManifest(t *testing.T) {
 
 	client := NewClient("bot-token", "", server.URL+"/")
 
-	resp, err := client.CreateAppManifest(context.Background(), &slack.Manifest{
-		Display: slack.Display{Name: "test"},
+	resp, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
 	}, "config-token")
 	if err != nil {
 		t.Errorf("CreateAppManifest() error = %v", err)
@@ -79,7 +79,7 @@ func TestClientCreateAppManifest_Error(t *testing.T) {
 
 	client := NewClient("bot-token", "config-token", server.URL+"/")
 
-	_, err := client.CreateAppManifest(context.Background(), &slack.Manifest{}, "")
+	_, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{}, "")
 	if err == nil {
 		t.Error("CreateAppManifest() error = nil, want an error")
 		return
@@ -189,20 +189,20 @@ func TestMarshalManifest(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		manifest *slack.Manifest
+		manifest *appmanifest.Manifest
 		want     string
 	}{
 		{
 			name: "empty value structs are omitted",
-			manifest: &slack.Manifest{
+			manifest: &appmanifest.Manifest{Manifest: slack.Manifest{
 				Display:  slack.Display{Name: "test"},
 				Settings: slack.Settings{SocketModeEnabled: false},
-			},
+			}},
 			want: `{"display_information":{"name":"test"}}`,
 		},
 		{
 			name: "disabled-only interactivity is omitted",
-			manifest: &slack.Manifest{
+			manifest: &appmanifest.Manifest{Manifest: slack.Manifest{
 				Display: slack.Display{Name: "test"},
 				Settings: slack.Settings{
 					Interactivity: slack.Interactivity{IsEnabled: false},
@@ -210,23 +210,47 @@ func TestMarshalManifest(t *testing.T) {
 						RequestUrl: "https://example.com/events",
 					},
 				},
-			},
+			}},
 			want: `{"display_information":{"name":"test"},"settings":{"event_subscriptions":{"request_url":"https://example.com/events"}}}`,
 		},
 		{
 			name: "configured blocks are kept",
-			manifest: &slack.Manifest{
-				Display: slack.Display{Name: "test"},
-				Features: slack.Features{
-					BotUser: slack.BotUser{DisplayName: "bot"},
+			manifest: &appmanifest.Manifest{
+				Manifest: slack.Manifest{
+					Display: slack.Display{Name: "test"},
+					Settings: slack.Settings{
+						Interactivity:     slack.Interactivity{IsEnabled: true, RequestUrl: "https://example.com/i"},
+						SocketModeEnabled: true,
+					},
 				},
-				Settings: slack.Settings{
-					Interactivity:     slack.Interactivity{IsEnabled: true, RequestUrl: "https://example.com/i"},
-					SocketModeEnabled: true,
+				Features: appmanifest.Features{
+					Features: slack.Features{
+						BotUser: slack.BotUser{DisplayName: "bot"},
+					},
 				},
 			},
 			want: `{"display_information":{"name":"test"},"features":{"bot_user":{"display_name":"bot"}},` +
 				`"settings":{"interactivity":{"is_enabled":true,"request_url":"https://example.com/i"},"socket_mode_enabled":true}}`,
+		},
+		{
+			name: "unfurl domains are sent",
+			manifest: &appmanifest.Manifest{
+				Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
+				Features: appmanifest.Features{
+					UnfurlDomains: []string{"example.com", "example.org"},
+				},
+			},
+			want: `{"display_information":{"name":"test"},"features":{"unfurl_domains":["example.com","example.org"]}}`,
+		},
+		{
+			name: "empty unfurl domains are omitted",
+			manifest: &appmanifest.Manifest{
+				Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
+				Features: appmanifest.Features{
+					UnfurlDomains: []string{},
+				},
+			},
+			want: `{"display_information":{"name":"test"}}`,
 		},
 	}
 
@@ -436,7 +460,7 @@ func TestClientCreateAppManifest_RetriesAfterRateLimit(t *testing.T) {
 	server, requests := rateLimitOnce(t, `{"ok": true, "app_id": "A012345678"}`)
 	client := NewClient("bot-token", "config-token", server.URL+"/")
 
-	resp, err := client.CreateAppManifest(context.Background(), &slack.Manifest{Display: slack.Display{Name: "test"}}, "")
+	resp, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{Manifest: slack.Manifest{Display: slack.Display{Name: "test"}}}, "")
 	if err != nil {
 		t.Errorf("CreateAppManifest() error = %v", err)
 		return

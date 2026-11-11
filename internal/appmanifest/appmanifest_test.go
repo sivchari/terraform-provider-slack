@@ -1,6 +1,7 @@
 package appmanifest
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -9,10 +10,11 @@ import (
 func TestNewDocument(t *testing.T) {
 	t.Parallel()
 
-	doc, err := NewDocument(&slack.Manifest{
-		Display: slack.Display{Name: "test"},
-		Features: slack.Features{
-			BotUser: slack.BotUser{DisplayName: "bot"},
+	doc, err := NewDocument(&Manifest{
+		Manifest: slack.Manifest{Display: slack.Display{Name: "test"}},
+		Features: Features{
+			Features:      slack.Features{BotUser: slack.BotUser{DisplayName: "bot"}},
+			UnfurlDomains: []string{"example.com"},
 		},
 	})
 	if err != nil {
@@ -24,6 +26,9 @@ func TestNewDocument(t *testing.T) {
 	botUser, _ := features["bot_user"].(map[string]any)
 	if got := botUser["display_name"]; got != "bot" {
 		t.Errorf("features.bot_user.display_name = %v, want %q", got, "bot")
+	}
+	if got, want := features["unfurl_domains"], []any{"example.com"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("features.unfurl_domains = %v, want %v", got, want)
 	}
 }
 
@@ -50,5 +55,8 @@ func TestDocumentManifest(t *testing.T) {
 	}
 	if !manifest.Features.BotUser.AlwaysOnline {
 		t.Errorf("Features.BotUser = %+v, want always_online true", manifest.Features.BotUser)
+	}
+	if want := []string{"example.com"}; !reflect.DeepEqual(manifest.Features.UnfurlDomains, want) {
+		t.Errorf("Features.UnfurlDomains = %v, want %v", manifest.Features.UnfurlDomains, want)
 	}
 }
