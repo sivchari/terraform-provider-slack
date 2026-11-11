@@ -150,7 +150,14 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 			"only overlays the fields in this schema, so manifest fields it does not\n" +
 			"model (for example `features.unfurl_domains`, `functions` or\n" +
 			"`settings.token_rotation_enabled`) are kept as they are. Such fields\n" +
-			"cannot be changed or removed through Terraform.",
+			"cannot be changed or removed through Terraform.\n\n" +
+			"Destroying the resource permanently deletes the app through\n" +
+			"`apps.manifest.delete` and succeeds if the app is already gone. When an\n" +
+			"update changes the OAuth scopes, the app must be reinstalled in each\n" +
+			"workspace before the new scopes take effect, and the provider warns\n" +
+			"about it. Slack validates the manifest on create and update, not at\n" +
+			"plan time, because a plan may run with a read-only proxy that cannot\n" +
+			"call the write-scoped `apps.manifest.validate`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -404,11 +411,34 @@ func (r *ResourceApp) Read(ctx context.Context, req resource.ReadRequest, res *r
 	res.Diagnostics.Append(diags...)
 }
 
-// isAppNotFound reports whether err is Slack's app_not_found, returned by
-// apps.manifest.export when the app does not exist or has been deleted.
+const errCodeAppNotFound = "app_not_found"
+
+// isAppNotFound reports whether err is Slack's app_not_found. Export goes
+// through the provider's HTTP client and delete through slack-go, so the code
+// arrives as *appmanifest.Error or slack.SlackErrorResponse respectively.
 func isAppNotFound(err error) bool {
 	var apiErr *appmanifest.Error
-	return errors.As(err, &apiErr) && apiErr.Code == "app_not_found"
+	if errors.As(err, &apiErr) {
+		return apiErr.Code == errCodeAppNotFound
+	}
+	var slackErr slack.SlackErrorResponse
+	if errors.As(err, &slackErr) {
+		return slackErr.Err == errCodeAppNotFound
+	}
+	return false
+}
+
+// addAppNotFoundError reports that Slack no longer knows the app while the
+// provider was doing during.
+func addAppNotFoundError(diags *diag.Diagnostics, appID, during string) {
+	diags.AddError(
+		"app not found",
+		fmt.Sprintf(
+			"Slack returned app_not_found for app %s while %s; "+
+				"the app may have been deleted outside Terraform. Run terraform plan again to recreate it.",
+			appID, during,
+		),
+	)
 }
 
 func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, res *resource.UpdateResponse) {
@@ -466,9 +496,24 @@ func (r *ResourceApp) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	merged := mergeManifest(current, planned, managedManifestPathsOnce())
 
-	if _, err := r.client.UpdateAppManifest(ctx, merged, "", state.ID.ValueString()); err != nil {
+	updated, err := r.client.UpdateAppManifest(ctx, merged, "", state.ID.ValueString())
+	if err != nil {
+		if isAppNotFound(err) {
+			addAppNotFoundError(&res.Diagnostics, state.ID.ValueString(), "updating it")
+			return
+		}
 		res.Diagnostics.AddError("failed to update app", err.Error())
 		return
+	}
+	if updated != nil && updated.PermissionsUpdated {
+		res.Diagnostics.AddWarning(
+			"App permissions changed",
+			fmt.Sprintf(
+				"The OAuth scopes of app %s (%s) changed. The app must be reinstalled in each workspace "+
+					"before the new scopes take effect.",
+				plan.DisplayInformation.Name.ValueString(), state.ID.ValueString(),
+			),
+		)
 	}
 
 	plan.ID = state.ID
@@ -485,8 +530,19 @@ func (r *ResourceApp) Delete(ctx context.Context, req resource.DeleteRequest, re
 	}
 
 	if _, err := r.client.DeleteManifestContext(ctx, "", state.ID.ValueString()); err != nil {
+		if isAppNotFound(err) {
+			res.Diagnostics.AddWarning(
+				"App not found during destroy",
+				fmt.Sprintf(
+					"Slack did not find app %s through apps.manifest.delete, so it was removed from state "+
+						"without being deleted. This also happens when the configuration token cannot see the app "+
+						"(different owner or workspace).",
+					state.ID.ValueString(),
+				),
+			)
+			return
+		}
 		res.Diagnostics.AddError("failed to delete app", err.Error())
-		return
 	}
 }
 
