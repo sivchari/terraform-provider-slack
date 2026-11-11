@@ -23,6 +23,15 @@ jobs:
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       - name: Run golangci-lint
         run: golangci-lint run ./...
+  goreleaser-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
   test:
     runs-on: ubuntu-24.04
     steps:
