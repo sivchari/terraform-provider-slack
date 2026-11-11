@@ -56,20 +56,19 @@ func (mr *MockAPIClientMockRecorder) ArchiveConversationContext(ctx, channelID a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ArchiveConversationContext", reflect.TypeOf((*MockAPIClient)(nil).ArchiveConversationContext), ctx, channelID)
 }
 
-// CloseConversationContext mocks base method.
-func (m *MockAPIClient) CloseConversationContext(ctx context.Context, channelID string) (bool, bool, error) {
+// AuthTestContext mocks base method.
+func (m *MockAPIClient) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CloseConversationContext", ctx, channelID)
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(bool)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret := m.ctrl.Call(m, "AuthTestContext", ctx)
+	ret0, _ := ret[0].(*slack.AuthTestResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// CloseConversationContext indicates an expected call of CloseConversationContext.
-func (mr *MockAPIClientMockRecorder) CloseConversationContext(ctx, channelID any) *gomock.Call {
+// AuthTestContext indicates an expected call of AuthTestContext.
+func (mr *MockAPIClientMockRecorder) AuthTestContext(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseConversationContext", reflect.TypeOf((*MockAPIClient)(nil).CloseConversationContext), ctx, channelID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AuthTestContext", reflect.TypeOf((*MockAPIClient)(nil).AuthTestContext), ctx)
 }
 
 // CreateAppManifest mocks base method.
@@ -192,6 +191,22 @@ func (mr *MockAPIClientMockRecorder) GetConversationInfoContext(ctx, input any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConversationInfoContext", reflect.TypeOf((*MockAPIClient)(nil).GetConversationInfoContext), ctx, input)
 }
 
+// GetConversationsContext mocks base method.
+func (m *MockAPIClient) GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetConversationsContext", ctx, params)
+	ret0, _ := ret[0].([]slack.Channel)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetConversationsContext indicates an expected call of GetConversationsContext.
+func (mr *MockAPIClientMockRecorder) GetConversationsContext(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConversationsContext", reflect.TypeOf((*MockAPIClient)(nil).GetConversationsContext), ctx, params)
+}
+
 // GetUserByEmailContext mocks base method.
 func (m *MockAPIClient) GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error) {
 	m.ctrl.T.Helper()
@@ -225,6 +240,21 @@ func (mr *MockAPIClientMockRecorder) GetUserGroupsContext(ctx any, opts ...any) 
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserGroupsContext", reflect.TypeOf((*MockAPIClient)(nil).GetUserGroupsContext), varargs...)
+}
+
+// GetUserInfoContext mocks base method.
+func (m *MockAPIClient) GetUserInfoContext(ctx context.Context, user string) (*slack.User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserInfoContext", ctx, user)
+	ret0, _ := ret[0].(*slack.User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserInfoContext indicates an expected call of GetUserInfoContext.
+func (mr *MockAPIClientMockRecorder) GetUserInfoContext(ctx, user any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserInfoContext", reflect.TypeOf((*MockAPIClient)(nil).GetUserInfoContext), ctx, user)
 }
 
 // GetUsersInConversationContext mocks base method.
@@ -277,6 +307,23 @@ func (mr *MockAPIClientMockRecorder) InviteUsersToConversationContext(ctx, chann
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InviteUsersToConversationContext", reflect.TypeOf((*MockAPIClient)(nil).InviteUsersToConversationContext), varargs...)
 }
 
+// JoinConversationContext mocks base method.
+func (m *MockAPIClient) JoinConversationContext(ctx context.Context, channelID string) (*slack.Channel, string, []string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "JoinConversationContext", ctx, channelID)
+	ret0, _ := ret[0].(*slack.Channel)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].([]string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// JoinConversationContext indicates an expected call of JoinConversationContext.
+func (mr *MockAPIClientMockRecorder) JoinConversationContext(ctx, channelID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "JoinConversationContext", reflect.TypeOf((*MockAPIClient)(nil).JoinConversationContext), ctx, channelID)
+}
+
 // KickUserFromConversationContext mocks base method.
 func (m *MockAPIClient) KickUserFromConversationContext(ctx context.Context, channelID, user string) error {
 	m.ctrl.T.Helper()
@@ -289,6 +336,21 @@ func (m *MockAPIClient) KickUserFromConversationContext(ctx context.Context, cha
 func (mr *MockAPIClientMockRecorder) KickUserFromConversationContext(ctx, channelID, user any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KickUserFromConversationContext", reflect.TypeOf((*MockAPIClient)(nil).KickUserFromConversationContext), ctx, channelID, user)
+}
+
+// RenameConversationContext mocks base method.
+func (m *MockAPIClient) RenameConversationContext(ctx context.Context, channelID, channelName string) (*slack.Channel, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RenameConversationContext", ctx, channelID, channelName)
+	ret0, _ := ret[0].(*slack.Channel)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RenameConversationContext indicates an expected call of RenameConversationContext.
+func (mr *MockAPIClientMockRecorder) RenameConversationContext(ctx, channelID, channelName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RenameConversationContext", reflect.TypeOf((*MockAPIClient)(nil).RenameConversationContext), ctx, channelID, channelName)
 }
 
 // SetPurposeOfConversationContext mocks base method.

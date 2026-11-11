@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sync"
 
 	"github.com/sivchari/terraform-provider-slack/internal/appmanifest"
 	"github.com/slack-go/slack"
@@ -26,25 +27,47 @@ type Client struct {
 	apiURL      string
 	configToken string
 	hasToken    bool
+
+	authMu   sync.Mutex
+	authTest *slack.AuthTestResponse
 }
 
 // NewClient builds a Client authenticated with the bot token, optionally
 // carrying an app configuration token used as the default for app manifest
 // and token rotation calls. Every request, whether issued through the
 // embedded *slack.Client or the raw manifest calls below, is sent to apiURL,
-// which must end with a slash (see DefaultAPIURL).
+// which must end with a slash (see DefaultAPIURL), and shares one retry
+// policy for HTTP 429 (see retryTransport).
 func NewClient(token, configurationToken, apiURL string) *Client {
-	opts := []slack.Option{slack.OptionAPIURL(apiURL)}
+	httpClient := &http.Client{Transport: newRetryTransport(nil)}
+	opts := []slack.Option{slack.OptionAPIURL(apiURL), slack.OptionHTTPClient(httpClient)}
 	if configurationToken != "" {
 		opts = append(opts, slack.OptionConfigToken(configurationToken))
 	}
 	return &Client{
 		Client:      slack.New(token, opts...),
-		httpClient:  http.DefaultClient,
+		httpClient:  httpClient,
 		apiURL:      apiURL,
 		configToken: configurationToken,
 		hasToken:    token != "",
 	}
+}
+
+// AuthTestContext returns the identity of the bot token. A token's identity
+// never changes, so the first successful answer is kept and failures are not.
+func (c *Client) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
+	if c.authTest == nil {
+		resp, err := c.Client.AuthTestContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.authTest = resp
+	}
+	identity := *c.authTest
+	return &identity, nil
 }
 
 // HasBotToken reports whether the client was configured with a bot token.

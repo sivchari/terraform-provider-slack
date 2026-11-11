@@ -14,6 +14,8 @@ import (
 var (
 	_ datasource.DataSource              = &DataSourceConversation{}
 	_ datasource.DataSourceWithConfigure = &DataSourceConversation{}
+
+	_ datasource.DataSourceWithConfigValidators = &DataSourceConversation{}
 )
 
 type DataSourceConversation struct {
@@ -55,66 +57,90 @@ func (d *DataSourceConversation) Metadata(_ context.Context, req datasource.Meta
 
 func (d *DataSourceConversation) Schema(_ context.Context, _ datasource.SchemaRequest, res *datasource.SchemaResponse) {
 	res.Schema = schema.Schema{
+		Description: "Looks up a Slack public or private channel by ID or name. Exactly one of id or name must be set. " +
+			"Archived channels are found too; check is_archived.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Required: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "ID of the channel, for example C0123456789. Conflicts with name.",
 			},
 			"name": schema.StringAttribute{
+				Optional: true,
 				Computed: true,
+				Description: "Name of the channel without the leading #. Conflicts with id. Slack cannot filter " +
+					"by name, so every channel is listed to find it; prefer id on large workspaces.",
 			},
 			"creator": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ID of the user who created the channel.",
 			},
 			"is_archived": schema.BoolAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Whether the channel is archived.",
 			},
 			"members": schema.ListAttribute{
 				ElementType: types.StringType,
 				Computed:    true,
+				Description: "IDs of the users in the channel, including the provider's own bot user.",
 			},
 			"topic": schema.SingleNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Topic of the channel.",
 				Attributes: map[string]schema.Attribute{
 					"value": schema.StringAttribute{
-						Computed: true,
+						Computed:    true,
+						Description: "Text of the topic.",
 					},
 					"creator": schema.StringAttribute{
-						Computed: true,
+						Computed:    true,
+						Description: "ID of the user who set the topic.",
 					},
 				},
 			},
 			"purpose": schema.SingleNestedAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Purpose of the channel.",
 				Attributes: map[string]schema.Attribute{
 					"value": schema.StringAttribute{
-						Computed: true,
+						Computed:    true,
+						Description: "Text of the purpose.",
 					},
 					"creator": schema.StringAttribute{
-						Computed: true,
+						Computed:    true,
+						Description: "ID of the user who set the purpose.",
 					},
 				},
 			},
 			"is_private": schema.BoolAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Whether the channel is private.",
 			},
 			"user": schema.StringAttribute{
-				Computed: true,
-				Optional: true,
+				Computed:    true,
+				Description: "ID of the other user in a direct message. Empty for public and private channels.",
 			},
 			"connected_team_ids": schema.ListAttribute{
 				ElementType: types.StringType,
 				Computed:    true,
+				Description: "IDs of the teams that Slack reports as connected to the channel.",
 			},
 			"shared_team_ids": schema.ListAttribute{
 				ElementType: types.StringType,
 				Computed:    true,
+				Description: "IDs of the teams that Slack reports the channel as shared with.",
 			},
 			"internal_team_ids": schema.ListAttribute{
 				ElementType: types.StringType,
 				Computed:    true,
+				Description: "IDs of the teams within the same organization that Slack reports for the channel.",
 			},
 		},
 	}
+}
+
+func (d *DataSourceConversation) ConfigValidators(context.Context) []datasource.ConfigValidator {
+	return []datasource.ConfigValidator{exactlyOneOf("id", "name")}
 }
 
 func (d *DataSourceConversation) Configure(ctx context.Context, req datasource.ConfigureRequest, res *datasource.ConfigureResponse) {
@@ -139,22 +165,39 @@ func (d *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRe
 	if res.Diagnostics.HasError() {
 		return
 	}
+	channelID := state.ID.ValueString()
+	if state.ID.IsNull() {
+		found, err := findConversationByName(ctx, d.client, state.Name.ValueString())
+		if err != nil {
+			res.Diagnostics.AddError(
+				fmt.Sprintf("Failed to list the conversations to find the name %q", state.Name.ValueString()),
+				err.Error(),
+			)
+			return
+		}
+		if found == nil {
+			res.Diagnostics.AddError(
+				"Conversation not found",
+				fmt.Sprintf("No public or private channel is named %q.", state.Name.ValueString()),
+			)
+			return
+		}
+		channelID = found.ID
+	}
 	channel, err := d.client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
-		ChannelID: state.ID.ValueString(),
+		ChannelID: channelID,
 	})
 	if err != nil {
 		res.Diagnostics.AddError(
-			fmt.Sprintf("the conversation with the id %s does not exist", state.ID.String()),
+			fmt.Sprintf("the conversation with the id %q could not be retrieved", channelID),
 			err.Error(),
 		)
 		return
 	}
-	users, _, err := d.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: state.ID.ValueString(),
-	})
+	users, err := allConversationMembers(ctx, d.client, channelID)
 	if err != nil {
 		res.Diagnostics.AddError(
-			fmt.Sprintf("failed to get users in conversation with id %s", state.ID.String()),
+			fmt.Sprintf("failed to get users in conversation with id %q", channelID),
 			err.Error(),
 		)
 		return
