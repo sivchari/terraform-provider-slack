@@ -460,7 +460,7 @@ func TestClientCreateAppManifest_RetriesAfterRateLimit(t *testing.T) {
 	server, requests := rateLimitOnce(t, `{"ok": true, "app_id": "A012345678"}`)
 	client := NewClient("bot-token", "config-token", server.URL+"/")
 
-	resp, err := client.CreateAppManifest(context.Background(), &slack.Manifest{Display: slack.Display{Name: "test"}}, "")
+	resp, err := client.CreateAppManifest(context.Background(), &appmanifest.Manifest{Manifest: slack.Manifest{Display: slack.Display{Name: "test"}}}, "")
 	if err != nil {
 		t.Errorf("CreateAppManifest() error = %v", err)
 		return
