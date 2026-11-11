@@ -46,6 +46,7 @@ func TestAccDataSourceConversation(t *testing.T) {
 	}).Return(conversationInfoResp, nil).AnyTimes()
 	client.EXPECT().GetUsersInConversationContext(gomock.Any(), &slack.GetUsersInConversationParameters{
 		ChannelID: "test",
+		Limit:     conversationPageSize,
 	}).Return(usersResp, "", nil).AnyTimes()
 
 	resource.UnitTest(t, resource.TestCase{
