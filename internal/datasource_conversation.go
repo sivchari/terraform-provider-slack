@@ -149,9 +149,7 @@ func (d *DataSourceConversation) Read(ctx context.Context, req datasource.ReadRe
 		)
 		return
 	}
-	users, _, err := d.client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: state.ID.ValueString(),
-	})
+	users, err := allConversationMembers(ctx, d.client, state.ID.ValueString())
 	if err != nil {
 		res.Diagnostics.AddError(
 			fmt.Sprintf("failed to get users in conversation with id %s", state.ID.String()),

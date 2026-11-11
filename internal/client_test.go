@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -383,6 +384,67 @@ func TestClientExportAppManifest_NotFound(t *testing.T) {
 	}
 	if got := err.Error(); got != "apps.manifest.export: app_not_found" {
 		t.Errorf("error = %q, want %q", got, "apps.manifest.export: app_not_found")
+	}
+}
+
+func TestClientAuthTestContext_CachesSuccess(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok": true, "user_id": "UBOT"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("bot-token", "", server.URL+"/")
+
+	for range 3 {
+		resp, err := client.AuthTestContext(context.Background())
+		if err != nil {
+			t.Errorf("AuthTestContext() error = %v", err)
+			return
+		}
+		if resp.UserID != "UBOT" {
+			t.Errorf("UserID = %q, want %q", resp.UserID, "UBOT")
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("auth.test calls = %d, want 1", got)
+	}
+}
+
+func TestClientAuthTestContext_DoesNotCacheFailure(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"ok": false, "error": "invalid_auth"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok": true, "user_id": "UBOT"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("bot-token", "", server.URL+"/")
+
+	if _, err := client.AuthTestContext(context.Background()); err == nil {
+		t.Errorf("AuthTestContext() error = nil, want invalid_auth")
+		return
+	}
+	resp, err := client.AuthTestContext(context.Background())
+	if err != nil {
+		t.Errorf("AuthTestContext() after a failure error = %v", err)
+		return
+	}
+	if resp.UserID != "UBOT" {
+		t.Errorf("UserID = %q, want %q", resp.UserID, "UBOT")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("auth.test calls = %d, want 2", got)
 	}
 }
 
