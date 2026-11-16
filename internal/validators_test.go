@@ -165,3 +165,62 @@ func TestNonEmptyList_ValidateList(t *testing.T) {
 		})
 	}
 }
+
+func TestStringLengthBetween_ValidateString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		minLen, maxLen int
+		value          types.String
+		wantErr        bool
+		wantInMsg      string
+	}{
+		{name: "at the minimum", minLen: 3, maxLen: 5, value: types.StringValue("abc")},
+		{name: "at the maximum", minLen: 3, maxLen: 5, value: types.StringValue("abcde")},
+		{name: "below the minimum", minLen: 3, maxLen: 5, value: types.StringValue("ab"), wantErr: true, wantInMsg: "has 2 characters"},
+		{name: "above the maximum", minLen: 3, maxLen: 5, value: types.StringValue("abcdef"), wantErr: true, wantInMsg: "has 6 characters"},
+		{name: "no minimum accepts empty", maxLen: 5, value: types.StringValue("")},
+		// Slack counts characters, not bytes: "あいう" is 9 bytes in UTF-8.
+		{name: "multibyte characters count once", minLen: 3, maxLen: 3, value: types.StringValue("あいう")},
+		{name: "multibyte below the minimum", minLen: 3, maxLen: 5, value: types.StringValue("あい"), wantErr: true, wantInMsg: "has 2 characters"},
+		{name: "null is skipped", minLen: 3, maxLen: 5, value: types.StringNull()},
+		{name: "unknown is skipped", minLen: 3, maxLen: 5, value: types.StringUnknown()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := validator.StringRequest{Path: path.Root("long_description"), ConfigValue: tt.value}
+			var resp validator.StringResponse
+			stringLengthBetween(tt.minLen, tt.maxLen).ValidateString(context.Background(), req, &resp)
+
+			if got := resp.Diagnostics.HasError(); got != tt.wantErr {
+				t.Errorf("HasError() = %v, want %v (diagnostics: %v)", got, tt.wantErr, resp.Diagnostics)
+				return
+			}
+			if tt.wantInMsg != "" && !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), tt.wantInMsg) {
+				t.Errorf("detail = %q, want it to contain %q", resp.Diagnostics.Errors()[0].Detail(), tt.wantInMsg)
+			}
+		})
+	}
+}
+
+func TestStringLengthBetween_Description(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		minLen, maxLen int
+		want           string
+	}{
+		{minLen: 175, maxLen: 4000, want: "length must be between 175 and 4000 characters"},
+		{maxLen: 35, want: "length must be at most 35 characters"},
+	}
+
+	for _, tt := range tests {
+		if got := stringLengthBetween(tt.minLen, tt.maxLen).Description(context.Background()); got != tt.want {
+			t.Errorf("Description() = %q, want %q", got, tt.want)
+		}
+	}
+}
