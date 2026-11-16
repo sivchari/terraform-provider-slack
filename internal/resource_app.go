@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/slack-go/slack"
 
@@ -159,7 +160,10 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 			"workspace before the new scopes take effect, and the provider warns\n" +
 			"about it. Slack validates the manifest on create and update, not at\n" +
 			"plan time, because a plan may run with a read-only proxy that cannot\n" +
-			"call the write-scoped `apps.manifest.validate`.",
+			"call the write-scoped `apps.manifest.validate`. The documented length\n" +
+			"limits of the string attributes (for example 175 to 4000 characters for\n" +
+			"`long_description`) are checked at plan time without calling Slack, and\n" +
+			"lengths are counted in characters rather than bytes.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -192,13 +196,16 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 				Required: true,
 				Attributes: map[string]schema.Attribute{
 					"name": schema.StringAttribute{
-						Required: true,
+						Required:   true,
+						Validators: []validator.String{stringLengthBetween(0, 35)},
 					},
 					"description": schema.StringAttribute{
-						Optional: true,
+						Optional:   true,
+						Validators: []validator.String{stringLengthBetween(0, 140)},
 					},
 					"long_description": schema.StringAttribute{
-						Optional: true,
+						Optional:   true,
+						Validators: []validator.String{stringLengthBetween(175, 4000)},
 					},
 					"background_color": schema.StringAttribute{
 						Optional: true,
@@ -226,7 +233,8 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 						Optional: true,
 						Attributes: map[string]schema.Attribute{
 							"display_name": schema.StringAttribute{
-								Required: true,
+								Required:   true,
+								Validators: []validator.String{stringLengthBetween(0, 80)},
 							},
 							"always_online": schema.BoolAttribute{
 								Optional: true,
@@ -238,13 +246,16 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"name": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 24)},
 								},
 								"callback_id": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 255)},
 								},
 								"description": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 150)},
 								},
 								"type": schema.StringAttribute{
 									Required: true,
@@ -257,19 +268,23 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"command": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 32)},
 								},
 								"description": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 2000)},
 								},
 								"should_escape": schema.BoolAttribute{
 									Optional: true,
 								},
 								"url": schema.StringAttribute{
-									Optional: true,
+									Optional:   true,
+									Validators: []validator.String{stringLengthBetween(0, 3000)},
 								},
 								"usage_hint": schema.StringAttribute{
-									Optional: true,
+									Optional:   true,
+									Validators: []validator.String{stringLengthBetween(0, 1000)},
 								},
 							},
 						},
@@ -289,10 +304,12 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"name": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 50)},
 								},
 								"callback_id": schema.StringAttribute{
-									Required: true,
+									Required:   true,
+									Validators: []validator.String{stringLengthBetween(0, 50)},
 								},
 							},
 						},
@@ -320,7 +337,8 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 						Optional: true,
 						Attributes: map[string]schema.Attribute{
 							"request_url": schema.StringAttribute{
-								Optional: true,
+								Optional:   true,
+								Validators: []validator.String{stringLengthBetween(0, 3500)},
 							},
 							"bot_events":  stringList,
 							"user_events": stringList,
@@ -333,10 +351,12 @@ func (r *ResourceApp) Schema(_ context.Context, _ resource.SchemaRequest, res *r
 								Required: true,
 							},
 							"request_url": schema.StringAttribute{
-								Optional: true,
+								Optional:   true,
+								Validators: []validator.String{stringLengthBetween(0, 3500)},
 							},
 							"message_menu_options_url": schema.StringAttribute{
-								Optional: true,
+								Optional:   true,
+								Validators: []validator.String{stringLengthBetween(0, 3500)},
 							},
 						},
 					},

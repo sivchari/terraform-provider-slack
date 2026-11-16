@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -157,5 +158,49 @@ func (v oneOfStringValidator) ValidateString(ctx context.Context, req validator.
 		req.Path,
 		"Invalid attribute value",
 		fmt.Sprintf("%s, got %q.", v.Description(ctx), req.ConfigValue.ValueString()),
+	)
+}
+
+// stringLengthBetween rejects a string whose length is outside
+// [minLength, maxLength]. A minLength of 0 sets only an upper bound.
+//
+// The length is counted in Unicode code points rather than bytes, as Slack
+// does for app manifest fields: a 109-character Japanese long_description,
+// 253 bytes in UTF-8, was rejected as shorter than 175 characters.
+func stringLengthBetween(minLength, maxLength int) validator.String {
+	return stringLengthBetweenValidator{minLength: minLength, maxLength: maxLength}
+}
+
+type stringLengthBetweenValidator struct {
+	minLength, maxLength int
+}
+
+func (v stringLengthBetweenValidator) requirement() string {
+	if v.minLength == 0 {
+		return fmt.Sprintf("at most %d characters", v.maxLength)
+	}
+	return fmt.Sprintf("between %d and %d characters", v.minLength, v.maxLength)
+}
+
+func (v stringLengthBetweenValidator) Description(context.Context) string {
+	return "length must be " + v.requirement()
+}
+
+func (v stringLengthBetweenValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v stringLengthBetweenValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	length := utf8.RuneCountInString(req.ConfigValue.ValueString())
+	if length >= v.minLength && length <= v.maxLength {
+		return
+	}
+	resp.Diagnostics.AddAttributeError(
+		req.Path,
+		"Invalid attribute value length",
+		fmt.Sprintf("The value has %d characters, but Slack accepts %s.", length, v.requirement()),
 	)
 }
